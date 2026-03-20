@@ -1,0 +1,33 @@
+# Core dependencies
+customtkinter>=5.2.0
+Pillow>=10.0.0
+numpy>=1.24.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 3D rendering and visualization
+pyopengl>=3.1.6
+pyglet>=2.0.0
+moderngl>=5.8.0
+pyrr>=0.10.3
+trimesh>=4.0.0
+
+# Video processing
+opencv-python>=4.8.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.8
+
+# Export formats
+FbxCommon>=0.1.0
+pygltflib>=1.16.0
+
+# GUI enhancements
+tkinterdnd2>=0.3.0
+CTkMessagebox>=2.5
+
+# Progress and utilities
+tqdm>=4.65.0
+colorama>=0.4.6
+
+# Build tools
+pyinstaller>=5.13.0
