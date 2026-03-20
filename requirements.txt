@@ -18,7 +18,6 @@ imageio>=2.31.0
 imageio-ffmpeg>=0.4.8
 
 # Export formats
-FbxCommon>=0.1.0
 pygltflib>=1.16.0
 
 # GUI enhancements
