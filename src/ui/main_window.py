@@ -10,6 +10,16 @@ from typing import Optional
 import threading
 import numpy as np
 from pathlib import Path
+import os
+import sys
+
+# Try to import tkinterdnd2 for drag and drop support
+try:
+    from tkinterdnd2 import TkinterDnD
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+    print("Warning: tkinterdnd2 not available, drag and drop disabled")
 
 # Import modules
 from src.ui.input_panel import InputPanel
@@ -20,7 +30,16 @@ from src.core.hair_strands import HairStrandsExtractor, HairStrandCollection
 from src.rendering.viewer_3d import ViewMode
 
 
-class MainWindow(ctk.CTk):
+# Create a custom CTk class that supports drag and drop
+class CTkDnD(ctk.CTk, TkinterDnD.DnDWrapper if HAS_DND else object):
+    """CTk window with drag and drop support."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if HAS_DND:
+            self.TkdndVersion = TkinterDnD._require(self)
+
+
+class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
     """
     Main application window.
     
@@ -38,6 +57,9 @@ class MainWindow(ctk.CTk):
         self.title("GaussianHairCube - Hair Reconstruction")
         self.geometry("1400x900")
         self.minsize(1000, 600)
+        
+        # Set window icon
+        self._set_window_icon()
         
         # Set theme
         ctk.set_appearance_mode("dark")
@@ -423,6 +445,33 @@ class MainWindow(ctk.CTk):
             
             if self.current_cloud is not None:
                 self.extract_btn.configure(state="normal")
+    
+    def _set_window_icon(self):
+        """Set the window icon."""
+        try:
+            # Determine base path (for PyInstaller or normal execution)
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                base_path = sys._MEIPASS
+            else:
+                # Running as script
+                base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+            # Try to load icon
+            icon_path = os.path.join(base_path, 'assets', 'icon.ico')
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
+            else:
+                # Try alternative path
+                icon_path = os.path.join(base_path, 'assets', 'icon.png')
+                if os.path.exists(icon_path):
+                    from PIL import Image, ImageTk
+                    icon_image = Image.open(icon_path)
+                    icon_photo = ImageTk.PhotoImage(icon_image)
+                    self.iconphoto(True, icon_photo)
+                    self._icon_photo = icon_photo  # Keep reference
+        except Exception as e:
+            print(f"Warning: Could not set window icon: {e}")
     
     def _show_settings(self):
         """Show settings dialog."""

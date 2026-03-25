@@ -15,6 +15,14 @@ from pathlib import Path
 import cv2
 import threading
 
+# Try to import tkinterdnd2 for drag and drop support
+try:
+    from tkinterdnd2 import DND_FILES
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+    print("Warning: tkinterdnd2 not available, drag and drop disabled")
+
 
 # Supported file formats
 IMAGE_FORMATS = [
@@ -115,6 +123,9 @@ class InputPanel(ctk.CTkFrame):
         self.preview_frame.bind("<Button-1>", lambda e: self._browse_file())
         self.preview_label.bind("<Button-1>", lambda e: self._browse_file())
         
+        # Setup drag and drop if available
+        self._setup_drag_drop()
+        
         # Control buttons frame
         self.controls_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.controls_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
@@ -179,6 +190,66 @@ class InputPanel(ctk.CTkFrame):
             height=32
         )
         self.extract_btn.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+    
+    def _setup_drag_drop(self):
+        """Setup drag and drop functionality."""
+        if not HAS_DND:
+            return
+        
+        try:
+            # Register the preview frame as a drop target
+            self.preview_frame.drop_target_register(DND_FILES)
+            self.preview_frame.dnd_bind('<<Drop>>', self._on_drop)
+            self.preview_frame.dnd_bind('<<DragEnter>>', self._on_drag_enter)
+            self.preview_frame.dnd_bind('<<DragLeave>>', self._on_drag_leave)
+            
+            # Also register the preview label
+            self.preview_label.drop_target_register(DND_FILES)
+            self.preview_label.dnd_bind('<<Drop>>', self._on_drop)
+            self.preview_label.dnd_bind('<<DragEnter>>', self._on_drag_enter)
+            self.preview_label.dnd_bind('<<DragLeave>>', self._on_drag_leave)
+            
+            print("Drag and drop enabled")
+        except Exception as e:
+            print(f"Warning: Could not setup drag and drop: {e}")
+    
+    def _on_drop(self, event):
+        """Handle file drop event."""
+        # Get the dropped file path
+        filepath = event.data
+        
+        # Clean up the path (remove curly braces if present on Windows)
+        if filepath.startswith('{') and filepath.endswith('}'):
+            filepath = filepath[1:-1]
+        
+        # Handle multiple files (take first one)
+        if ' ' in filepath and not Path(filepath).exists():
+            # Try to split by space and take first valid path
+            parts = filepath.split()
+            for part in parts:
+                clean_part = part.strip('{}')
+                if Path(clean_part).exists():
+                    filepath = clean_part
+                    break
+        
+        # Reset visual feedback
+        self._on_drag_leave(None)
+        
+        # Load the file
+        if filepath and Path(filepath).exists():
+            self._load_file(filepath)
+    
+    def _on_drag_enter(self, event):
+        """Handle drag enter event - visual feedback."""
+        self.preview_frame.configure(fg_color="gray30")
+        if not self.current_image:
+            self.preview_label.configure(text="Drop to load file")
+    
+    def _on_drag_leave(self, event):
+        """Handle drag leave event - reset visual feedback."""
+        self.preview_frame.configure(fg_color="gray20")
+        if not self.current_image:
+            self.preview_label.configure(text="Drop image/video here\nor click Upload")
     
     def _browse_file(self):
         """Open file browser dialog."""
