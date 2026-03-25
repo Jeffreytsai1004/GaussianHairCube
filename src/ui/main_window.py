@@ -447,8 +447,18 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
                 self.extract_btn.configure(state="normal")
     
     def _set_window_icon(self):
-        """Set the window icon."""
+        """Set the window icon for both title bar and taskbar."""
         try:
+            from PIL import Image, ImageTk
+            
+            # Set Windows AppUserModelID for proper taskbar icon
+            try:
+                import ctypes
+                myappid = 'gaussianhaircut.gaussianhaircube.app.1.0'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass  # Not on Windows or failed
+            
             # Determine base path (for PyInstaller or normal execution)
             if getattr(sys, 'frozen', False):
                 # Running as compiled executable
@@ -457,19 +467,35 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
                 # Running as script
                 base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
-            # Try to load icon
-            icon_path = os.path.join(base_path, 'assets', 'icon.ico')
-            if os.path.exists(icon_path):
-                self.iconbitmap(icon_path)
-            else:
-                # Try alternative path
-                icon_path = os.path.join(base_path, 'assets', 'icon.png')
-                if os.path.exists(icon_path):
-                    from PIL import Image, ImageTk
-                    icon_image = Image.open(icon_path)
-                    icon_photo = ImageTk.PhotoImage(icon_image)
-                    self.iconphoto(True, icon_photo)
-                    self._icon_photo = icon_photo  # Keep reference
+            # Try to load .ico file
+            icon_ico_path = os.path.join(base_path, 'assets', 'icon.ico')
+            icon_png_path = os.path.join(base_path, 'assets', 'icon.png')
+            
+            # Set iconbitmap for Windows title bar
+            if os.path.exists(icon_ico_path):
+                self.iconbitmap(default=icon_ico_path)
+                self.iconbitmap(icon_ico_path)
+            
+            # Also set iconphoto for taskbar (more reliable on some systems)
+            if os.path.exists(icon_png_path):
+                icon_image = Image.open(icon_png_path)
+                # Create multiple sizes for better display
+                icon_sizes = []
+                for size in [16, 32, 48, 64, 128, 256]:
+                    if icon_image.width >= size and icon_image.height >= size:
+                        resized = icon_image.resize((size, size), Image.Resampling.LANCZOS)
+                        icon_sizes.append(ImageTk.PhotoImage(resized))
+                
+                if icon_sizes:
+                    self.iconphoto(True, *icon_sizes)
+                    self._icon_photos = icon_sizes  # Keep references
+            elif os.path.exists(icon_ico_path):
+                # Try to use .ico as fallback for iconphoto
+                icon_image = Image.open(icon_ico_path)
+                icon_photo = ImageTk.PhotoImage(icon_image)
+                self.iconphoto(True, icon_photo)
+                self._icon_photo = icon_photo
+                
         except Exception as e:
             print(f"Warning: Could not set window icon: {e}")
     
