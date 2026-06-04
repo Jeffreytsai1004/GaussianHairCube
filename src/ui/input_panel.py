@@ -2,29 +2,25 @@
 Input Panel Module
 ==================
 
-Left panel for uploading images or videos.
-Supports multiple formats including common image and video formats.
+Multi-image input panel. Accepts at least 3 images for 3D reconstruction.
+Supports bulk file selection and drag-and-drop.
 """
 
-import customtkinter as ctk
-from tkinter import filedialog
-from PIL import Image, ImageTk
-import numpy as np
-from typing import Optional, Callable, List
+import re
 from pathlib import Path
-import cv2
-import threading
+from typing import Callable, List, Optional
 
-# Try to import tkinterdnd2 for drag and drop support
+import customtkinter as ctk
+import numpy as np
+from PIL import Image
+from tkinter import filedialog
+
 try:
     from tkinterdnd2 import DND_FILES
     HAS_DND = True
 except ImportError:
     HAS_DND = False
-    print("Warning: tkinterdnd2 not available, drag and drop disabled")
 
-
-# Supported file formats
 IMAGE_FORMATS = [
     ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff *.webp"),
     ("PNG", "*.png"),
@@ -32,480 +28,262 @@ IMAGE_FORMATS = [
     ("BMP", "*.bmp"),
     ("TIFF", "*.tiff"),
     ("WebP", "*.webp"),
-    ("All files", "*.*")
+    ("All files", "*.*"),
 ]
 
-VIDEO_FORMATS = [
-    ("Video files", "*.mp4 *.avi *.mov *.mkv *.webm"),
-    ("MP4", "*.mp4"),
-    ("AVI", "*.avi"),
-    ("MOV", "*.mov"),
-    ("MKV", "*.mkv"),
-    ("WebM", "*.webm"),
-    ("All files", "*.*")
-]
-
-ALL_FORMATS = [
-    ("All supported", "*.png *.jpg *.jpeg *.bmp *.tiff *.webp *.mp4 *.avi *.mov *.mkv *.webm"),
-    ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff *.webp"),
-    ("Video files", "*.mp4 *.avi *.mov *.mkv *.webm"),
-    ("All files", "*.*")
-]
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+MIN_IMAGES = 3
+_THUMB_SIZE = 78
 
 
 class InputPanel(ctk.CTkFrame):
     """
-    Input panel for image/video upload.
-    
-    Features:
-    - Drag and drop support
-    - Image preview
-    - Video frame extraction
-    - Format validation
+    Multi-image input panel.
+
+    Fires on_input_loaded({'type': 'images', 'images': [...], 'paths': [...]})
+    every time the image list changes.
     """
-    
-    def __init__(
-        self, 
-        parent, 
-        on_input_loaded: Optional[Callable] = None,
-        **kwargs
-    ):
-        """
-        Initialize the input panel.
-        
-        Args:
-            parent: Parent widget
-            on_input_loaded: Callback when input is loaded
-            **kwargs: Additional arguments for CTkFrame
-        """
+
+    def __init__(self, parent, on_input_loaded: Optional[Callable] = None, **kwargs):
         super().__init__(parent, **kwargs)
-        
+
         self.on_input_loaded = on_input_loaded
-        
-        # State
-        self.current_image: Optional[np.ndarray] = None
-        self.current_video_path: Optional[str] = None
-        self.video_frames: List[np.ndarray] = []
-        self.is_video = False
-        
-        # Configure grid
+
+        self._images: List[np.ndarray] = []
+        self._paths: List[str] = []
+        self._thumb_refs: List = []  # prevent GC of CTkImage objects
+
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
-        
+
         self._create_widgets()
-    
+
+    # ------------------------------------------------------------------
+    # Widget construction
+    # ------------------------------------------------------------------
+
     def _create_widgets(self):
-        """Create panel widgets."""
-        # Title
-        self.title_label = ctk.CTkLabel(
-            self,
-            text="📁 Input",
-            font=ctk.CTkFont(size=18, weight="bold")
+        ctk.CTkLabel(
+            self, text="📁 Input Images",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+
+        self.thumb_scroll = ctk.CTkScrollableFrame(self, fg_color="gray20")
+        self.thumb_scroll.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        self.thumb_scroll.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self._placeholder = ctk.CTkLabel(
+            self.thumb_scroll,
+            text="Drop images here\nor click Add Images",
+            font=ctk.CTkFont(size=13),
+            text_color="gray60",
         )
-        self.title_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
-        
-        # Preview area
-        self.preview_frame = ctk.CTkFrame(self, fg_color="gray20")
-        self.preview_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-        self.preview_frame.grid_columnconfigure(0, weight=1)
-        self.preview_frame.grid_rowconfigure(0, weight=1)
-        
-        # Preview label with placeholder
-        self.preview_label = ctk.CTkLabel(
-            self.preview_frame,
-            text="Drop image/video here\nor click Upload",
-            font=ctk.CTkFont(size=14),
-            text_color="gray60"
-        )
-        self.preview_label.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        
-        # Bind click to preview area
-        self.preview_frame.bind("<Button-1>", lambda e: self._browse_file())
-        self.preview_label.bind("<Button-1>", lambda e: self._browse_file())
-        
-        # Setup drag and drop if available
+        self._placeholder.grid(row=0, column=0, columnspan=3, padx=20, pady=40)
+
         self._setup_drag_drop()
-        
-        # Control buttons frame
-        self.controls_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.controls_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
-        self.controls_frame.grid_columnconfigure((0, 1), weight=1)
-        
-        # Upload button
-        self.upload_btn = ctk.CTkButton(
-            self.controls_frame,
-            text="📤 Upload",
-            command=self._browse_file,
-            height=36
-        )
-        self.upload_btn.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
-        
-        # Clear button
-        self.clear_btn = ctk.CTkButton(
-            self.controls_frame,
-            text="🗑️ Clear",
-            command=self._clear_input,
-            fg_color="gray40",
-            hover_color="gray30",
-            height=36
-        )
-        self.clear_btn.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
-        
-        # File info
-        self.info_label = ctk.CTkLabel(
+
+        ctrl = ctk.CTkFrame(self, fg_color="transparent")
+        ctrl.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+        ctrl.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkButton(
+            ctrl, text="📤 Add Images",
+            command=self._browse_files, height=36,
+        ).grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
+
+        ctk.CTkButton(
+            ctrl, text="🗑️ Clear All",
+            command=self._clear_all,
+            fg_color="gray40", hover_color="gray30", height=36,
+        ).grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
+
+        self.status_label = ctk.CTkLabel(
             self,
-            text="No file loaded",
+            text=f"No images loaded (minimum {MIN_IMAGES} required)",
             font=ctk.CTkFont(size=11),
-            text_color="gray60"
+            text_color="gray60",
         )
-        self.info_label.grid(row=3, column=0, padx=10, pady=(0, 5), sticky="w")
-        
-        # Video controls (hidden by default)
-        self.video_controls_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.video_controls_frame.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
-        self.video_controls_frame.grid_columnconfigure(0, weight=1)
-        self.video_controls_frame.grid_remove()  # Hide initially
-        
-        # Frame slider
-        self.frame_slider = ctk.CTkSlider(
-            self.video_controls_frame,
-            from_=0,
-            to=100,
-            command=self._on_frame_slider_change
-        )
-        self.frame_slider.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        
-        self.frame_label = ctk.CTkLabel(
-            self.video_controls_frame,
-            text="Frame: 0 / 0",
-            font=ctk.CTkFont(size=11)
-        )
-        self.frame_label.grid(row=1, column=0, padx=5, pady=(0, 5))
-        
-        # Extract frames button
-        self.extract_btn = ctk.CTkButton(
-            self.video_controls_frame,
-            text="🎬 Extract Frames",
-            command=self._extract_video_frames,
-            height=32
-        )
-        self.extract_btn.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-    
+        self.status_label.grid(row=3, column=0, padx=10, pady=(0, 5), sticky="w")
+
     def _setup_drag_drop(self):
-        """Setup drag and drop functionality."""
         if not HAS_DND:
             return
-        
         try:
-            # Register the preview frame as a drop target
-            self.preview_frame.drop_target_register(DND_FILES)
-            self.preview_frame.dnd_bind('<<Drop>>', self._on_drop)
-            self.preview_frame.dnd_bind('<<DragEnter>>', self._on_drag_enter)
-            self.preview_frame.dnd_bind('<<DragLeave>>', self._on_drag_leave)
-            
-            # Also register the preview label
-            self.preview_label.drop_target_register(DND_FILES)
-            self.preview_label.dnd_bind('<<Drop>>', self._on_drop)
-            self.preview_label.dnd_bind('<<DragEnter>>', self._on_drag_enter)
-            self.preview_label.dnd_bind('<<DragLeave>>', self._on_drag_leave)
-            
-            print("Drag and drop enabled")
-        except Exception as e:
-            print(f"Warning: Could not setup drag and drop: {e}")
-    
-    def _on_drop(self, event):
-        """Handle file drop event."""
-        # Get the dropped file path
-        filepath = event.data
-        
-        # Clean up the path (remove curly braces if present on Windows)
-        if filepath.startswith('{') and filepath.endswith('}'):
-            filepath = filepath[1:-1]
-        
-        # Handle multiple files (take first one)
-        if ' ' in filepath and not Path(filepath).exists():
-            # Try to split by space and take first valid path
-            parts = filepath.split()
-            for part in parts:
-                clean_part = part.strip('{}')
-                if Path(clean_part).exists():
-                    filepath = clean_part
-                    break
-        
-        # Reset visual feedback
-        self._on_drag_leave(None)
-        
-        # Load the file
-        if filepath and Path(filepath).exists():
-            self._load_file(filepath)
-    
-    def _on_drag_enter(self, event):
-        """Handle drag enter event - visual feedback."""
-        self.preview_frame.configure(fg_color="gray30")
-        if not self.current_image:
-            self.preview_label.configure(text="Drop to load file")
-    
-    def _on_drag_leave(self, event):
-        """Handle drag leave event - reset visual feedback."""
-        self.preview_frame.configure(fg_color="gray20")
-        if not self.current_image:
-            self.preview_label.configure(text="Drop image/video here\nor click Upload")
-    
-    def _browse_file(self):
-        """Open file browser dialog."""
-        filepath = filedialog.askopenfilename(
-            title="Select Image or Video",
-            filetypes=ALL_FORMATS
-        )
-        
-        if filepath:
-            self._load_file(filepath)
-    
-    def _load_file(self, filepath: str):
-        """Load image or video file."""
-        path = Path(filepath)
-        extension = path.suffix.lower()
-        
-        # Check if image or video
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'}
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm'}
-        
-        if extension in image_extensions:
-            self._load_image(filepath)
-        elif extension in video_extensions:
-            self._load_video(filepath)
-        else:
-            self.info_label.configure(text="Unsupported file format")
-    
-    def _load_image(self, filepath: str):
-        """Load and display an image."""
-        try:
-            # Load with PIL
-            pil_image = Image.open(filepath)
-            
-            # Convert to RGB if necessary
-            if pil_image.mode != 'RGB':
-                pil_image = pil_image.convert('RGB')
-            
-            # Store as numpy array
-            self.current_image = np.array(pil_image)
-            self.is_video = False
-            self.current_video_path = None
-            self.video_frames = []
-            
-            # Display preview
-            self._display_preview(pil_image)
-            
-            # Update info
-            h, w = self.current_image.shape[:2]
-            filename = Path(filepath).name
-            self.info_label.configure(text=f"📷 {filename} ({w}×{h})")
-            
-            # Hide video controls
-            self.video_controls_frame.grid_remove()
-            
-            # Callback
-            if self.on_input_loaded:
-                self.on_input_loaded({
-                    'type': 'image',
-                    'image': self.current_image,
-                    'path': filepath
-                })
-                
-        except Exception as e:
-            self.info_label.configure(text=f"Error loading image: {str(e)}")
-    
-    def _load_video(self, filepath: str):
-        """Load and display a video."""
-        try:
-            # Open video
-            cap = cv2.VideoCapture(filepath)
-            
-            if not cap.isOpened():
-                raise ValueError("Could not open video file")
-            
-            # Get video properties
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            # Read first frame
-            ret, frame = cap.read()
-            if ret:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.current_image = frame_rgb
-                
-                # Display preview
-                pil_image = Image.fromarray(frame_rgb)
-                self._display_preview(pil_image)
-            
-            cap.release()
-            
-            # Store video info
-            self.is_video = True
-            self.current_video_path = filepath
-            self.video_frames = []
-            
-            # Update info
-            filename = Path(filepath).name
-            duration = frame_count / fps if fps > 0 else 0
-            self.info_label.configure(
-                text=f"🎥 {filename} ({width}×{height}, {frame_count} frames, {duration:.1f}s)"
+            self.thumb_scroll.drop_target_register(DND_FILES)
+            self.thumb_scroll.dnd_bind("<<Drop>>", self._on_drop)
+            self.thumb_scroll.dnd_bind(
+                "<<DragEnter>>", lambda e: self.thumb_scroll.configure(fg_color="gray30")
             )
-            
-            # Show video controls
-            self.frame_slider.configure(to=max(1, frame_count - 1))
-            self.frame_slider.set(0)
-            self.frame_label.configure(text=f"Frame: 1 / {frame_count}")
-            self.video_controls_frame.grid()
-            
-        except Exception as e:
-            self.info_label.configure(text=f"Error loading video: {str(e)}")
-    
-    def _display_preview(self, pil_image: Image.Image):
-        """Display image preview in the panel."""
-        # Get preview area size
-        self.update_idletasks()
-        preview_width = self.preview_frame.winfo_width() - 20
-        preview_height = self.preview_frame.winfo_height() - 20
-        
-        if preview_width <= 0:
-            preview_width = 300
-        if preview_height <= 0:
-            preview_height = 200
-        
-        # Resize image to fit
-        img_width, img_height = pil_image.size
-        scale = min(preview_width / img_width, preview_height / img_height)
-        
-        new_width = max(1, int(img_width * scale))
-        new_height = max(1, int(img_height * scale))
-        
-        resized = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Convert to CTkImage
-        self._preview_image = ctk.CTkImage(
-            light_image=resized,
-            dark_image=resized,
-            size=(new_width, new_height)
+            self.thumb_scroll.dnd_bind(
+                "<<DragLeave>>", lambda e: self.thumb_scroll.configure(fg_color="gray20")
+            )
+        except Exception as exc:
+            print(f"Warning: drag-and-drop setup failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_drop(self, event):
+        self.thumb_scroll.configure(fg_color="gray20")
+        raw = event.data or ""
+        # Parse space-separated paths; curly-braces wrap paths with spaces on Windows
+        paths = re.findall(r"\{([^}]+)\}", raw)
+        remainder = re.sub(r"\{[^}]+\}", "", raw).split()
+        paths.extend(remainder)
+
+        for p in paths:
+            p = p.strip().strip("{}")
+            if p and Path(p).exists() and Path(p).suffix.lower() in _IMAGE_EXTS:
+                self._load_image(p)
+
+    def _browse_files(self):
+        filepaths = filedialog.askopenfilenames(
+            title="Select Images (hold Ctrl/Shift for multiple)",
+            filetypes=IMAGE_FORMATS,
         )
-        
-        # Update label
-        self.preview_label.configure(image=self._preview_image, text="")
-    
-    def _on_frame_slider_change(self, value):
-        """Handle frame slider change."""
-        if not self.current_video_path:
-            return
-        
-        frame_idx = int(value)
-        
-        # Load frame from video
+        for fp in filepaths:
+            self._load_image(fp)
+
+    # ------------------------------------------------------------------
+    # Image loading
+    # ------------------------------------------------------------------
+
+    def _load_image(self, filepath: str):
         try:
-            cap = cv2.VideoCapture(self.current_video_path)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
-            cap.release()
-            
-            if ret:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.current_image = frame_rgb
-                
-                pil_image = Image.fromarray(frame_rgb)
-                self._display_preview(pil_image)
-                
-                frame_count = int(self.frame_slider.cget("to")) + 1
-                self.frame_label.configure(text=f"Frame: {frame_idx + 1} / {frame_count}")
-                
-        except Exception as e:
-            print(f"Error loading frame: {e}")
-    
-    def _extract_video_frames(self):
-        """Extract frames from video in background."""
-        if not self.current_video_path:
+            pil_img = Image.open(filepath).convert("RGB")
+            arr = np.array(pil_img)
+            idx = len(self._images)
+            self._images.append(arr)
+            self._paths.append(filepath)
+            self._add_thumbnail(pil_img, idx)
+            self._update_status()
+            self._fire_callback()
+        except Exception as exc:
+            self.status_label.configure(
+                text=f"Error loading {Path(filepath).name}: {exc}",
+                text_color="#f44336",
+            )
+
+    def _add_thumbnail(self, pil_img: Image.Image, idx: int):
+        # Hide placeholder on first image
+        try:
+            if self._placeholder.winfo_ismapped():
+                self._placeholder.grid_remove()
+        except Exception:
+            pass
+
+        row, col = divmod(idx, 3)
+
+        card = ctk.CTkFrame(self.thumb_scroll, fg_color="gray30", corner_radius=6)
+        card.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
+
+        thumb = pil_img.copy()
+        thumb.thumbnail((_THUMB_SIZE, _THUMB_SIZE), Image.Resampling.LANCZOS)
+        ctk_thumb = ctk.CTkImage(light_image=thumb, dark_image=thumb, size=(_THUMB_SIZE, _THUMB_SIZE))
+        self._thumb_refs.append(ctk_thumb)
+
+        ctk.CTkLabel(card, image=ctk_thumb, text="").pack(padx=4, pady=(4, 0))
+
+        name = Path(self._paths[idx]).name
+        display_name = name if len(name) <= 12 else name[:9] + "..."
+        ctk.CTkLabel(card, text=display_name, font=ctk.CTkFont(size=9), text_color="gray70").pack()
+
+        ctk.CTkButton(
+            card, text="✕", width=22, height=18,
+            fg_color="gray50", hover_color="#b71c1c",
+            font=ctk.CTkFont(size=9),
+            command=lambda i=idx: self._remove_image(i),
+        ).pack(pady=(0, 3))
+
+    def _remove_image(self, idx: int):
+        if idx >= len(self._images):
             return
-        
-        self.extract_btn.configure(state="disabled", text="Extracting...")
-        
-        def extract():
-            try:
-                cap = cv2.VideoCapture(self.current_video_path)
-                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                
-                # Sample frames (limit to max 100 frames)
-                max_frames = 100
-                step = max(1, frame_count // max_frames)
-                
-                frames = []
-                for i in range(0, frame_count, step):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-                    ret, frame = cap.read()
-                    if ret:
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frames.append(frame_rgb)
-                
-                cap.release()
-                
-                self.video_frames = frames
-                
-                # Update UI from main thread
-                self.after(0, lambda: self._on_frames_extracted(len(frames)))
-                
-            except Exception as e:
-                self.after(0, lambda: self._on_extract_error(str(e)))
-        
-        thread = threading.Thread(target=extract, daemon=True)
-        thread.start()
-    
-    def _on_frames_extracted(self, count: int):
-        """Called when frame extraction completes."""
-        self.extract_btn.configure(state="normal", text=f"✓ {count} Frames Extracted")
-        self.info_label.configure(
-            text=self.info_label.cget("text") + f" - {count} frames extracted"
-        )
-        
-        # Callback
+        self._images.pop(idx)
+        self._paths.pop(idx)
+        self._rebuild_thumbnails()
+        self._update_status()
+        self._fire_callback()
+
+    def _rebuild_thumbnails(self):
+        for widget in self.thumb_scroll.winfo_children():
+            widget.destroy()
+        self._thumb_refs.clear()
+
+        if not self._images:
+            self._placeholder = ctk.CTkLabel(
+                self.thumb_scroll,
+                text="Drop images here\nor click Add Images",
+                font=ctk.CTkFont(size=13),
+                text_color="gray60",
+            )
+            self._placeholder.grid(row=0, column=0, columnspan=3, padx=20, pady=40)
+            return
+
+        for i, (arr, _) in enumerate(zip(self._images, self._paths)):
+            pil_img = Image.fromarray(arr)
+            self._add_thumbnail(pil_img, i)
+
+    # ------------------------------------------------------------------
+    # Status / callback
+    # ------------------------------------------------------------------
+
+    def _update_status(self):
+        n = len(self._images)
+        if n == 0:
+            self.status_label.configure(
+                text=f"No images loaded (minimum {MIN_IMAGES} required)",
+                text_color="gray60",
+            )
+        elif n < MIN_IMAGES:
+            self.status_label.configure(
+                text=f"{n} image{'s' if n > 1 else ''} loaded — add {MIN_IMAGES - n} more to process",
+                text_color="#ff9800",
+            )
+        else:
+            self.status_label.configure(
+                text=f"{n} images loaded ✓",
+                text_color="#4caf50",
+            )
+
+    def _fire_callback(self):
         if self.on_input_loaded:
             self.on_input_loaded({
-                'type': 'video',
-                'frames': self.video_frames,
-                'path': self.current_video_path
+                "type": "images",
+                "images": self._images.copy(),
+                "paths": self._paths.copy(),
             })
-    
-    def _on_extract_error(self, error: str):
-        """Called when frame extraction fails."""
-        self.extract_btn.configure(state="normal", text="🎬 Extract Frames")
-        self.info_label.configure(text=f"Error: {error}")
-    
-    def _clear_input(self):
-        """Clear current input."""
-        self.current_image = None
-        self.current_video_path = None
-        self.video_frames = []
-        self.is_video = False
-        
-        # Reset preview
-        self.preview_label.configure(
-            image=None,
-            text="Drop image/video here\nor click Upload"
-        )
-        
-        # Reset info
-        self.info_label.configure(text="No file loaded")
-        
-        # Hide video controls
-        self.video_controls_frame.grid_remove()
-        self.extract_btn.configure(state="normal", text="🎬 Extract Frames")
-    
+
+    def _clear_all(self):
+        self._images.clear()
+        self._paths.clear()
+        self._rebuild_thumbnails()
+        self._update_status()
+        if self.on_input_loaded:
+            self.on_input_loaded({"type": "images", "images": [], "paths": []})
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get_images(self) -> List[np.ndarray]:
+        return self._images.copy()
+
+    def get_paths(self) -> List[str]:
+        return self._paths.copy()
+
+    def get_image_count(self) -> int:
+        return len(self._images)
+
+    def is_ready(self) -> bool:
+        return len(self._images) >= MIN_IMAGES
+
+    # Backwards-compat shims so main_window.py works without changes
     def get_current_image(self) -> Optional[np.ndarray]:
-        """Get the currently loaded image."""
-        return self.current_image
-    
+        return self._images[0] if self._images else None
+
     def get_video_frames(self) -> List[np.ndarray]:
-        """Get extracted video frames."""
-        return self.video_frames
-    
+        return []
+
     def is_video_input(self) -> bool:
-        """Check if current input is a video."""
-        return self.is_video
+        return False

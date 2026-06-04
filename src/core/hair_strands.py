@@ -167,16 +167,21 @@ class HairStrandsExtractor:
             'method': StrandExtractionMethod.CLUSTERING,
             'min_strand_length': 0.05,
             'points_per_strand': 32,
-            'num_strands': 10000,
+            'num_strands': 2000,
             'clustering_eps': 0.02,
             'flow_smoothness': 0.5,
         }
+        self._cancel_flag: bool = False
         
     def set_parameters(self, **kwargs):
         """Update extraction parameters."""
         for key, value in kwargs.items():
             if key in self.params:
                 self.params[key] = value
+
+    def cancel(self):
+        """Request cancellation of the current extraction."""
+        self._cancel_flag = True
     
     def extract(
         self,
@@ -185,16 +190,23 @@ class HairStrandsExtractor:
     ) -> HairStrandCollection:
         """
         Extract hair strands from Gaussian cloud.
-        
+
         Args:
             gaussian_cloud: Input Gaussian splat cloud
             callback: Progress callback function
-            
+
         Returns:
             HairStrandCollection containing extracted strands
         """
+        # Guard against empty or missing cloud
+        if gaussian_cloud is None or gaussian_cloud.num_splats == 0:
+            raise ValueError("高斯点云为空，请先生成高斯点云")
+
+        # Reset cancel flag at start of each extraction
+        self._cancel_flag = False
+
         method = self.params['method']
-        
+
         if method == StrandExtractionMethod.CLUSTERING:
             return self._extract_clustering(gaussian_cloud, callback)
         elif method == StrandExtractionMethod.FLOW_FIELD:
@@ -285,10 +297,12 @@ class HairStrandsExtractor:
         # Integrate strands through flow field
         strands = []
         for i, seed in enumerate(seed_points):
+            if self._cancel_flag:
+                break
             strand = self._integrate_strand(seed, flow_field, positions, colors)
             if strand is not None:
                 strands.append(strand)
-            
+
             if callback and i % 500 == 0:
                 progress = 0.5 + 0.4 * (i / len(seed_points))
                 callback(progress, f"Integrating strand {i}/{len(seed_points)}")
@@ -306,71 +320,72 @@ class HairStrandsExtractor:
         return collection
     
     def _compute_principal_directions(
-        self, 
+        self,
         cloud: GaussianCloud
     ) -> np.ndarray:
-        """Compute principal direction for each Gaussian based on covariance."""
-        directions = []
-        
-        for splat in cloud.splats:
-            # Get eigenvectors of covariance
-            eigenvalues, eigenvectors = np.linalg.eigh(splat.covariance)
-            
-            # Principal direction is eigenvector with largest eigenvalue
-            principal_idx = np.argmax(eigenvalues)
-            direction = eigenvectors[:, principal_idx]
-            
-            # Ensure consistent orientation (point generally downward for hair)
-            if direction[1] > 0:  # y is up
-                direction = -direction
-            
-            directions.append(direction)
-        
-        return np.array(directions)
+        """Compute principal direction for each Gaussian (vectorized)."""
+        n = len(cloud.splats)
+        if n == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        # Stack all covariance matrices: (N, 3, 3)
+        covs = np.stack([s.covariance for s in cloud.splats], axis=0).astype(np.float64)
+
+        # Batch eigendecomposition — far faster than N individual calls
+        eigenvalues, eigenvectors = np.linalg.eigh(covs)  # (N,3), (N,3,3)
+
+        # Principal direction = eigenvector with largest eigenvalue (last column after eigh)
+        directions = eigenvectors[:, :, -1].astype(np.float32)  # (N, 3)
+
+        # Flip so hair points downward (negative y)
+        flip_mask = directions[:, 1] > 0
+        directions[flip_mask] *= -1
+
+        return directions
     
     def _build_direction_graph(
         self,
         positions: np.ndarray,
         directions: np.ndarray,
-        k_neighbors: int = 10
+        k_neighbors: int = 8
     ) -> Dict[int, List[Tuple[int, float]]]:
-        """Build graph connecting Gaussians with coherent directions."""
+        """Build graph connecting Gaussians with coherent directions (vectorized)."""
         from scipy.spatial import cKDTree
-        
+
         n = len(positions)
         tree = cKDTree(positions)
-        
-        adjacency = {i: [] for i in range(n)}
-        
-        # Find k nearest neighbors for each point
-        distances, indices = tree.query(positions, k=min(k_neighbors + 1, n))
-        
-        for i in range(n):
-            for j_idx in range(1, len(indices[i])):  # Skip self
-                j = indices[i][j_idx]
-                dist = distances[i][j_idx]
-                
-                # Check direction coherence
-                dir_i = directions[i]
-                dir_j = directions[j]
-                
-                # Compute direction from i to j
-                edge_dir = positions[j] - positions[i]
-                edge_len = np.linalg.norm(edge_dir)
-                if edge_len > 1e-6:
-                    edge_dir = edge_dir / edge_len
-                else:
-                    continue
-                
-                # Check if directions are coherent with edge
-                coherence_i = abs(np.dot(dir_i, edge_dir))
-                coherence_j = abs(np.dot(dir_j, edge_dir))
-                coherence = (coherence_i + coherence_j) / 2
-                
-                if coherence > 0.5:  # Threshold for coherence
-                    weight = dist * (2 - coherence)  # Prefer coherent connections
-                    adjacency[i].append((j, weight))
-        
+
+        k = min(k_neighbors + 1, n)
+        distances, indices = tree.query(positions, k=k)  # (N, k)
+
+        # Vectorised coherence computation
+        # For each point i and each neighbour j: edge_dir = (pos[j] - pos[i])
+        # Shape: (N, k-1, 3)
+        nbr_idx = indices[:, 1:]          # (N, k-1)  — skip self
+        nbr_dist = distances[:, 1:]       # (N, k-1)
+
+        pos_i = positions[:, np.newaxis, :]          # (N, 1, 3)
+        pos_j = positions[nbr_idx]                   # (N, k-1, 3)
+        edge_vec = pos_j - pos_i                     # (N, k-1, 3)
+        edge_len = np.linalg.norm(edge_vec, axis=2, keepdims=True).clip(min=1e-6)
+        edge_dir = edge_vec / edge_len               # (N, k-1, 3)  normalised
+
+        dir_i = directions[:, np.newaxis, :]         # (N, 1, 3)
+        dir_j = directions[nbr_idx]                  # (N, k-1, 3)
+
+        coh_i = np.abs((dir_i * edge_dir).sum(axis=2))   # (N, k-1)
+        coh_j = np.abs((dir_j * edge_dir).sum(axis=2))   # (N, k-1)
+        coherence = (coh_i + coh_j) / 2                   # (N, k-1)
+
+        weight = nbr_dist * (2.0 - coherence)             # (N, k-1)
+        keep = (coherence > 0.5) & (nbr_dist > 1e-6)     # (N, k-1) bool mask
+
+        # Build adjacency dict from the boolean mask
+        adjacency: Dict[int, List[Tuple[int, float]]] = {i: [] for i in range(n)}
+        rows, cols = np.where(keep)
+        for r, c in zip(rows, cols):
+            adjacency[int(r)].append((int(nbr_idx[r, c]), float(weight[r, c])))
+
         return adjacency
     
     def _trace_strands_from_graph(
@@ -389,11 +404,18 @@ class HairStrandsExtractor:
         y_coords = positions[:, 1]
         root_threshold = np.percentile(y_coords, 90)  # Top 10%
         root_candidates = np.where(y_coords >= root_threshold)[0]
-        
+
+        # Cap root candidates to avoid runaway tracing on large point clouds
+        max_roots = self.params.get('num_strands', 2000)
+        if len(root_candidates) > max_roots:
+            root_candidates = np.random.choice(root_candidates, max_roots, replace=False)
+
         for root_idx, root in enumerate(root_candidates):
+            if self._cancel_flag:
+                break
             if visited[root]:
                 continue
-            
+
             # Trace strand from this root
             strand_indices = self._trace_single_strand(
                 root, positions, adjacency, visited

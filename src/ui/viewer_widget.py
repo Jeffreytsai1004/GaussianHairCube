@@ -60,6 +60,7 @@ class ViewerWidget(ctk.CTkFrame):
         self.is_rendering = False
         self._render_thread = None
         self._stop_render = False
+        self._render_pending: bool = False
         
         # Configure grid
         self.grid_columnconfigure(0, weight=1)
@@ -286,13 +287,36 @@ class ViewerWidget(ctk.CTkFrame):
                 self._render()
     
     def _render(self):
-        """Render the current view."""
+        """Render the current view synchronously (used for interactive events)."""
         try:
             image = self.viewer.render_to_image()
             self._update_canvas(image)
             self._update_stats()
         except Exception as e:
             print(f"Render error: {e}")
+
+    def _render_async(self):
+        """Kick off a background render if one isn't already pending."""
+        if self._render_pending:
+            return
+        self._render_pending = True
+        t = threading.Thread(target=self._do_render_in_background, daemon=True)
+        t.start()
+
+    def _do_render_in_background(self):
+        """Run render_to_image() off the main thread, then post result back."""
+        try:
+            image = self.viewer.render_to_image()
+            self.after(0, lambda img=image: self._render_complete(img))
+        except Exception as e:
+            print(f"Async render error: {e}")
+            self._render_pending = False
+
+    def _render_complete(self, image):
+        """Called on the main thread when the background render finishes."""
+        self._render_pending = False
+        self._update_canvas(image)
+        self._update_stats()
     
     def _update_stats(self):
         """Update stats display."""
@@ -308,29 +332,29 @@ class ViewerWidget(ctk.CTkFrame):
     def set_gaussian_data(self, cloud: GaussianCloud):
         """
         Set Gaussian cloud data for visualization.
-        
+
         Args:
             cloud: Gaussian cloud to visualize
         """
         positions = cloud.get_positions()
         colors = cloud.get_colors()
         scales = np.array([s.scale for s in cloud.splats])
-        
+
         self.viewer.set_gaussian_data(positions, colors, scales)
-        self._render()
-    
+        self._render_async()
+
     def set_curve_data(self, strands: HairStrandCollection):
         """
         Set hair strand data for visualization.
-        
+
         Args:
             strands: Hair strand collection to visualize
         """
         curves = [s.points for s in strands.strands]
         colors = [s.colors for s in strands.strands]
-        
+
         self.viewer.set_curve_data(curves, colors)
-        self._render()
+        self._render_async()
     
     def show_loading(self, message: str = "Processing..."):
         """Show loading indicator."""
