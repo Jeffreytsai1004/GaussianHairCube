@@ -278,12 +278,6 @@ class InputPanel(ctk.CTkFrame):
     def is_ready(self) -> bool:
         return len(self._images) >= MIN_IMAGES
 
-    # Backwards-compat shims so main_window.py works without changes
     def get_current_image(self) -> Optional[np.ndarray]:
+        """Return the first loaded image, or None."""
         return self._images[0] if self._images else None
-
-    def get_video_frames(self) -> List[np.ndarray]:
-        return []
-
-    def is_video_input(self) -> bool:
-        return False

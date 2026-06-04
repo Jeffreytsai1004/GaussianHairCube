@@ -420,48 +420,85 @@ class Viewer3D:
                 image[psy[in_bounds], psx[in_bounds], :3] = rgb[in_bounds]
 
     def _render_curves_software(self, image: np.ndarray, mvp: np.ndarray):
-        """Software render hair curves (vectorized projection, Bresenham segments)."""
-        if self.curve_positions is None:
+        """Batch-project ALL curve points in one matrix multiply, draw with cv2.polylines."""
+        if not self.curve_positions:
             return
 
-        for curve_idx, curve in enumerate(self.curve_positions):
-            n = len(curve)
-            if n < 2:
+        try:
+            import cv2
+            _cv2 = True
+        except ImportError:
+            _cv2 = False
+
+        bgr = image[:, :, 2::-1].copy() if _cv2 else None
+
+        # --- Single batch projection for all curves ---
+        lengths = [len(c) for c in self.curve_positions]
+        total = sum(lengths)
+        if total == 0:
+            return
+
+        all_pts = np.ones((total, 4), dtype=np.float32)
+        all_pts[:, :3] = np.vstack(self.curve_positions)
+        clip = (mvp @ all_pts.T).T  # (total, 4)
+
+        w = clip[:, 3]
+        valid_w = w > 1e-6
+        safe_w = np.where(valid_w, w, 1.0)
+        ndc = clip[:, :3] / safe_w[:, None]
+        in_view = valid_w & (np.abs(ndc[:, 0]) <= 1.5) & (np.abs(ndc[:, 1]) <= 1.5)
+
+        sx = ((ndc[:, 0] + 1.0) * 0.5 * self.width).astype(np.int32)
+        sy = ((1.0 - ndc[:, 1]) * 0.5 * self.height).astype(np.int32)
+
+        # --- Split back per curve and draw ---
+        offset = 0
+        for ci, length in enumerate(lengths):
+            end = offset + length
+            if length < 2:
+                offset = end
                 continue
 
-            colors = self.curve_colors[curve_idx] if self.curve_colors else np.full((n, 3), 0.3, dtype=np.float32)
+            s_iv = in_view[offset:end]
+            s_sx = sx[offset:end]
+            s_sy = sy[offset:end]
+            colors = (
+                self.curve_colors[ci]
+                if self.curve_colors
+                else np.full((length, 3), 0.3, dtype=np.float32)
+            )
+            avg_col = (np.mean(colors, axis=0) * 255).clip(0, 255).astype(np.uint8)
 
-            # Batch-project all curve points at once
-            pos_h = np.ones((n, 4), dtype=np.float32)
-            pos_h[:, :3] = curve
-            clip = (mvp @ pos_h.T).T  # (n, 4)
-
-            screen_pts = [None] * n
-            for i in range(n):
-                w = clip[i, 3]
-                if w <= 1e-6:
-                    continue
-                ndc = clip[i, :3] / w
-                if np.any(np.abs(ndc[:2]) > 1.5):
-                    continue
-                screen_pts[i] = (
-                    int((ndc[0] + 1) * 0.5 * self.width),
-                    int((1.0 - ndc[1]) * 0.5 * self.height),
-                )
-
-            prev_i = None
-            for i in range(n):
-                if screen_pts[i] is not None:
-                    if prev_i is not None:
-                        self._draw_line(
-                            image,
-                            screen_pts[prev_i][0], screen_pts[prev_i][1],
-                            screen_pts[i][0], screen_pts[i][1],
-                            colors[prev_i], colors[i],
-                        )
-                    prev_i = i
+            if _cv2:
+                bgr_col = (int(avg_col[2]), int(avg_col[1]), int(avg_col[0]))
+                if s_iv.all():
+                    # Fast path: entire curve in view — single polylines call
+                    pts = np.stack([s_sx, s_sy], axis=1).reshape(-1, 1, 2).astype(np.int32)
+                    cv2.polylines(bgr, [pts], False, bgr_col, 1, cv2.LINE_AA)
                 else:
-                    prev_i = None
+                    # Slow path: find contiguous valid runs
+                    vi = s_iv.astype(np.int8)
+                    diff = np.diff(np.concatenate([[0], vi, [0]]))
+                    for s, e in zip(np.where(diff == 1)[0], np.where(diff == -1)[0]):
+                        if e - s < 2:
+                            continue
+                        pts = np.stack([s_sx[s:e], s_sy[s:e]], axis=1).reshape(-1, 1, 2).astype(np.int32)
+                        cv2.polylines(bgr, [pts], False, bgr_col, 1, cv2.LINE_AA)
+            else:
+                prev_i = None
+                for i in range(length):
+                    if s_iv[i]:
+                        if prev_i is not None:
+                            self._draw_line(image, int(s_sx[prev_i]), int(s_sy[prev_i]),
+                                            int(s_sx[i]), int(s_sy[i]), colors[prev_i], colors[i])
+                        prev_i = i
+                    else:
+                        prev_i = None
+
+            offset = end
+
+        if _cv2:
+            image[:, :, :3] = bgr[:, :, ::-1]
     
     def _draw_line(
         self,
@@ -509,6 +546,44 @@ class Viewer3D:
             
             step += 1
     
+    def screen_to_world_ray(
+        self, sx: float, sy: float
+    ) -> tuple:
+        """Convert screen pixel (sx, sy) to a world-space ray (origin, direction)."""
+        aspect = self.width / max(self.height, 1)
+        mvp = self.camera.get_projection_matrix(aspect) @ self.camera.get_view_matrix()
+        try:
+            inv_mvp = np.linalg.inv(mvp)
+        except np.linalg.LinAlgError:
+            return None, None
+
+        nx = (sx / self.width) * 2.0 - 1.0
+        ny = 1.0 - (sy / self.height) * 2.0
+
+        near_w = inv_mvp @ np.array([nx, ny, -1.0, 1.0])
+        far_w  = inv_mvp @ np.array([nx, ny,  1.0, 1.0])
+        near_w = near_w[:3] / near_w[3]
+        far_w  = far_w[:3]  / far_w[3]
+
+        direction = far_w - near_w
+        norm = np.linalg.norm(direction)
+        if norm < 1e-8:
+            return None, None
+        return near_w.copy(), direction / norm
+
+    def pick_nearest_gaussian(self, sx: float, sy: float, max_dist: float = 0.5):
+        """Return 3D position of Gaussian nearest to the screen-click ray, or None."""
+        if self.gaussian_positions is None or len(self.gaussian_positions) == 0:
+            return None
+        origin, direction = self.screen_to_world_ray(sx, sy)
+        if origin is None:
+            return None
+        diff = self.gaussian_positions - origin           # (N, 3)
+        perp = np.cross(diff, direction)                  # (N, 3)
+        dists = np.linalg.norm(perp, axis=1)             # (N,)
+        idx = int(np.argmin(dists))
+        return self.gaussian_positions[idx].copy() if dists[idx] <= max_dist else None
+
     def get_render_stats(self) -> Dict[str, Any]:
         """Get rendering statistics."""
         stats = {

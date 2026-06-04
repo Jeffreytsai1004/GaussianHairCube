@@ -61,6 +61,9 @@ class ViewerWidget(ctk.CTkFrame):
         self._render_thread = None
         self._stop_render = False
         self._render_pending: bool = False
+
+        # Geometry edit mode: when set, mouse clicks call this instead of orbiting
+        self._brush_callback = None   # Callable[[int, int], None] | None
         
         # Configure grid
         self.grid_columnconfigure(0, weight=1)
@@ -246,28 +249,42 @@ class ViewerWidget(ctk.CTkFrame):
         self.viewer._fit_camera_to_data()
         self._render()
     
+    def set_brush_callback(self, cb):
+        """Enable edit mode: mouse left-click/drag calls cb(x, y) instead of orbiting."""
+        self._brush_callback = cb
+
+    def clear_brush_callback(self):
+        """Disable edit mode and restore normal orbit behaviour."""
+        self._brush_callback = None
+
     def _on_mouse_press(self, event):
         """Handle mouse press."""
-        self.viewer.on_mouse_press(event.x, event.y, 0)
-    
+        if self._brush_callback:
+            self._brush_callback(event.x, event.y)
+        else:
+            self.viewer.on_mouse_press(event.x, event.y, 0)
+
     def _on_middle_press(self, event):
         """Handle middle mouse press."""
         self.viewer.on_mouse_press(event.x, event.y, 2)
-    
+
     def _on_right_press(self, event):
         """Handle right mouse press."""
         self.viewer.on_mouse_press(event.x, event.y, 1)
-    
+
     def _on_mouse_release(self, event):
         """Handle mouse release."""
         self.viewer.on_mouse_release(0)
         self.viewer.on_mouse_release(1)
         self.viewer.on_mouse_release(2)
-    
+
     def _on_mouse_drag(self, event):
         """Handle mouse drag."""
-        self.viewer.on_mouse_move(event.x, event.y)
-        self._render()
+        if self._brush_callback:
+            self._brush_callback(event.x, event.y)
+        else:
+            self.viewer.on_mouse_move(event.x, event.y)
+            self._render()
     
     def _on_mouse_scroll(self, event):
         """Handle mouse scroll."""

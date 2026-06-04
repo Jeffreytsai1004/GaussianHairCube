@@ -38,6 +38,7 @@ from src.ui.output_panel import OutputPanel
 from src.ui.viewer_widget import ViewerWidget
 from src.core.gaussian_generator import GaussianGenerator, GaussianCloud
 from src.core.hair_strands import HairStrandsExtractor, HairStrandCollection
+from src.core.geometry_controller import GeometryController, GeometryBrush, ControlMode
 from src.rendering.viewer_3d import ViewMode
 from src.config import settings_manager
 
@@ -83,11 +84,13 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Initialize processors
         self.gaussian_generator = GaussianGenerator()
         self.strand_extractor = HairStrandsExtractor()
+        self.geometry_controller = GeometryController()
 
         # State
         self.current_cloud: Optional[GaussianCloud] = None
         self.current_strands: Optional[HairStrandCollection] = None
         self.app_state: AppState = AppState.IDLE
+        self._edit_mode: bool = False
 
         # Window close protection
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -180,8 +183,8 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         """Create processing control buttons."""
         self.controls_frame = ctk.CTkFrame(self.viewer_frame, fg_color="transparent")
         self.controls_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
-        self.controls_frame.grid_columnconfigure((0, 1, 2), weight=1)
-        
+        self.controls_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
         # Generate Gaussians button
         self.generate_btn = ctk.CTkButton(
             self.controls_frame,
@@ -192,7 +195,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             state="disabled"
         )
         self.generate_btn.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        
+
         # Extract Curves button
         self.extract_btn = ctk.CTkButton(
             self.controls_frame,
@@ -203,7 +206,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             state="disabled"
         )
         self.extract_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        
+
         # Auto Process button
         self.auto_btn = ctk.CTkButton(
             self.controls_frame,
@@ -216,6 +219,22 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             state="disabled"
         )
         self.auto_btn.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+
+        # Edit Gaussians button
+        self.edit_btn = ctk.CTkButton(
+            self.controls_frame,
+            text="🖌️ Edit",
+            command=self._toggle_edit_mode,
+            height=40,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="gray40",
+            hover_color="gray30",
+            state="disabled"
+        )
+        self.edit_btn.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+
+        # Geometry edit panel (hidden by default)
+        self._create_geometry_edit_panel()
         
         # Progress frame
         self.progress_frame = ctk.CTkFrame(self.controls_frame, fg_color="transparent")
@@ -247,7 +266,157 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         )
         self.cancel_btn.grid(row=0, column=1, padx=(8, 0), pady=(5, 0))
         self.cancel_btn.grid_remove()  # Hidden initially
-    
+
+    def _create_geometry_edit_panel(self):
+        """Create the geometry brush editing panel (hidden by default)."""
+        self.geo_frame = ctk.CTkFrame(self.viewer_frame, fg_color="gray15", corner_radius=8)
+        self.geo_frame.grid(row=3, column=0, padx=10, pady=(0, 6), sticky="ew")
+        self.geo_frame.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
+        self.geo_frame.grid_remove()  # Hidden initially
+
+        # --- Row 0: Brush mode ---
+        ctk.CTkLabel(self.geo_frame, text="笔刷模式:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, padx=(8, 4), pady=6, sticky="w")
+
+        self._brush_mode = ctk.StringVar(value="DENSITY")
+        modes = [("密度", "DENSITY"), ("朝向", "ORIENTATION"), ("缩放", "SCALE"), ("颜色", "COLOR")]
+        for col, (label, val) in enumerate(modes):
+            ctk.CTkRadioButton(
+                self.geo_frame, text=label, variable=self._brush_mode, value=val,
+                font=ctk.CTkFont(size=11), width=60
+            ).grid(row=0, column=col + 1, padx=4, pady=6)
+
+        # --- Row 1: Radius ---
+        ctk.CTkLabel(self.geo_frame, text="半径:", font=ctk.CTkFont(size=11)).grid(
+            row=1, column=0, padx=(8, 4), pady=4, sticky="w")
+        self._brush_radius_var = ctk.DoubleVar(value=0.15)
+        self._radius_slider = ctk.CTkSlider(
+            self.geo_frame, from_=0.01, to=0.5, variable=self._brush_radius_var,
+            command=lambda v: self._radius_label.configure(text=f"{v:.2f}")
+        )
+        self._radius_slider.grid(row=1, column=1, columnspan=3, padx=4, pady=4, sticky="ew")
+        self._radius_label = ctk.CTkLabel(self.geo_frame, text="0.15", font=ctk.CTkFont(size=11), width=36)
+        self._radius_label.grid(row=1, column=4, padx=(0, 8))
+
+        # --- Row 2: Strength ---
+        ctk.CTkLabel(self.geo_frame, text="强度:", font=ctk.CTkFont(size=11)).grid(
+            row=2, column=0, padx=(8, 4), pady=4, sticky="w")
+        self._brush_strength_var = ctk.DoubleVar(value=0.3)
+        self._strength_slider = ctk.CTkSlider(
+            self.geo_frame, from_=0.0, to=1.0, variable=self._brush_strength_var,
+            command=lambda v: self._strength_label.configure(text=f"{v:.2f}")
+        )
+        self._strength_slider.grid(row=2, column=1, columnspan=3, padx=4, pady=4, sticky="ew")
+        self._strength_label = ctk.CTkLabel(self.geo_frame, text="0.30", font=ctk.CTkFont(size=11), width=36)
+        self._strength_label.grid(row=2, column=4, padx=(0, 8))
+
+        # --- Row 3: Action buttons ---
+        btn_row = ctk.CTkFrame(self.geo_frame, fg_color="transparent")
+        btn_row.grid(row=3, column=0, columnspan=5, padx=8, pady=(4, 8), sticky="ew")
+        btn_row.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkButton(btn_row, text="↩ 撤销", command=self._geo_undo,
+                      fg_color="gray40", hover_color="gray30",
+                      height=30, font=ctk.CTkFont(size=12)).grid(row=0, column=0, padx=4, sticky="ew")
+        ctk.CTkButton(btn_row, text="🔄 平滑", command=self._geo_smooth,
+                      fg_color="gray40", hover_color="gray30",
+                      height=30, font=ctk.CTkFont(size=12)).grid(row=0, column=1, padx=4, sticky="ew")
+        ctk.CTkButton(btn_row, text="✅ 完成编辑", command=self._exit_edit_mode,
+                      fg_color="#1565c0", hover_color="#0d47a1",
+                      height=30, font=ctk.CTkFont(size=12)).grid(row=0, column=2, padx=4, sticky="ew")
+
+        self._geo_status = ctk.CTkLabel(
+            self.geo_frame, text="点击视口中的高斯点云以应用笔刷",
+            font=ctk.CTkFont(size=10), text_color="gray60"
+        )
+        self._geo_status.grid(row=4, column=0, columnspan=5, padx=8, pady=(0, 6))
+
+    def _toggle_edit_mode(self):
+        """Enter or exit geometry edit mode."""
+        if self._edit_mode:
+            self._exit_edit_mode()
+        else:
+            self._enter_edit_mode()
+
+    def _enter_edit_mode(self):
+        """Switch to geometry brush editing mode."""
+        if self.current_cloud is None:
+            return
+        self._edit_mode = True
+        self.geometry_controller.set_cloud(self.current_cloud)
+        self.edit_btn.configure(text="🖌️ 编辑中…", fg_color="#e65100", hover_color="#bf360c")
+        self.geo_frame.grid()
+        self.viewer.set_brush_callback(self._on_brush_click)
+        self._apply_state(AppState.GAUSSIANS_READY)  # keep other buttons disabled-ish
+        self.status_label.configure(text="编辑模式：在视口点击/拖动应用笔刷")
+
+    def _exit_edit_mode(self):
+        """Leave geometry brush editing mode and sync updated cloud back."""
+        self._edit_mode = False
+        updated = self.geometry_controller.get_cloud()
+        if updated is not None:
+            self.current_cloud = updated
+            self.viewer.set_gaussian_data(updated)
+        self.viewer.clear_brush_callback()
+        self.geo_frame.grid_remove()
+        self.edit_btn.configure(text="🖌️ Edit", fg_color="gray40", hover_color="gray30")
+        self.status_label.configure(text=f"高斯点云已更新：{self.current_cloud.num_splats} 个点")
+
+    def _on_brush_click(self, sx: int, sy: int):
+        """Called when user clicks/drags in viewport during edit mode."""
+        pos = self.viewer.viewer.pick_nearest_gaussian(float(sx), float(sy))
+        if pos is None:
+            self._geo_status.configure(text="未拾取到高斯点 —— 尝试点击点云内部")
+            return
+        mode_map = {
+            "DENSITY": ControlMode.DENSITY,
+            "ORIENTATION": ControlMode.ORIENTATION,
+            "SCALE": ControlMode.SCALE,
+            "COLOR": ControlMode.COLOR,
+        }
+        mode = mode_map.get(self._brush_mode.get(), ControlMode.DENSITY)
+        brush = GeometryBrush(
+            center=pos,
+            radius=float(self._brush_radius_var.get()),
+            falloff=0.5,
+            strength=float(self._brush_strength_var.get()),
+            mode=mode,
+        )
+        changed = self.geometry_controller.apply_brush(brush)
+        if changed:
+            updated = self.geometry_controller.get_cloud()
+            self.viewer.viewer.set_gaussian_data(
+                updated.get_positions(), updated.get_colors()
+            )
+            self.viewer._render()
+            stats = self.geometry_controller.get_statistics()
+            self._geo_status.configure(
+                text=f"笔刷已应用 | {stats.get('num_splats', 0)} 个高斯点"
+            )
+
+    def _geo_undo(self):
+        """Undo last brush stroke."""
+        if self.geometry_controller.undo():
+            updated = self.geometry_controller.get_cloud()
+            self.viewer.viewer.set_gaussian_data(updated.get_positions(), updated.get_colors())
+            self.viewer._render()
+            self._geo_status.configure(text="已撤销上一步操作")
+        else:
+            self._geo_status.configure(text="没有可撤销的操作")
+
+    def _geo_smooth(self):
+        """Apply global smoothing to the entire Gaussian cloud."""
+        if self.geometry_controller.current_cloud is None:
+            return
+        cloud = self.geometry_controller.current_cloud
+        center = cloud.bounds_min + (cloud.bounds_max - cloud.bounds_min) * 0.5
+        radius = float(np.linalg.norm(cloud.bounds_max - cloud.bounds_min) * 0.8)
+        self.geometry_controller.smooth_region(center, radius, iterations=2)
+        updated = self.geometry_controller.get_cloud()
+        self.viewer.viewer.set_gaussian_data(updated.get_positions(), updated.get_colors())
+        self.viewer._render()
+        self._geo_status.configure(text="全局平滑已完成")
+
     def _create_footer(self):
         """Create footer section."""
         self.footer_frame = ctk.CTkFrame(self, fg_color="transparent", height=30)
@@ -422,6 +591,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.output_panel.set_strand_data(strands)
 
         self._apply_state(AppState.DONE)
+        self.edit_btn.configure(state="normal")
         self.status_label.configure(
             text=f"Generated {cloud.num_splats} splats, {strands.num_strands} strands"
         )
@@ -441,6 +611,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             self._apply_state(AppState.GAUSSIANS_READY)
 
         self.extract_btn.configure(state="normal")
+        self.edit_btn.configure(state="normal")   # edit available once cloud exists
         self.status_label.configure(text=f"Generated {cloud.num_splats} Gaussians")
     
     def _on_curves_extracted(self, strands: HairStrandCollection):
@@ -499,6 +670,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             self.generate_btn.configure(state="disabled")
             self.extract_btn.configure(state="disabled")
             self.auto_btn.configure(state="disabled")
+            self.edit_btn.configure(state="disabled")
         else:
             # Only enable if we have enough images
             if self.input_panel.is_ready():
@@ -507,6 +679,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
 
             if self.current_cloud is not None:
                 self.extract_btn.configure(state="normal")
+                self.edit_btn.configure(state="normal")
 
     def _apply_state(self, state: AppState):
         """Apply UI changes consistently based on the new AppState."""
@@ -863,7 +1036,7 @@ class SettingsDialog(ctk.CTkToplevel):
         parent.settings['points_per_strand'] = points_per_strand
         parent.settings['num_strands'] = num_strands
         parent.settings['theme'] = self.theme_menu.get().lower()
-        parent.settings['hf_endpoint'] = getattr(self, 'mirror_entry', None) and self.mirror_entry.get().strip() or ''
+        parent.settings['hf_endpoint'] = self.mirror_entry.get().strip() if hasattr(self, 'mirror_entry') else ''
 
         # Apply mirror immediately so any subsequent download uses it
         try:
