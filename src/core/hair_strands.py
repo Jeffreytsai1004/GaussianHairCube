@@ -378,7 +378,7 @@ class HairStrandsExtractor:
         coherence = (coh_i + coh_j) / 2                   # (N, k-1)
 
         weight = nbr_dist * (2.0 - coherence)             # (N, k-1)
-        keep = (coherence > 0.5) & (nbr_dist > 1e-6)     # (N, k-1) bool mask
+        keep = (coherence > 0.4) & (nbr_dist > 1e-6)     # lowered from 0.5 → more edges
 
         # Build adjacency dict from the boolean mask
         adjacency: Dict[int, List[Tuple[int, float]]] = {i: [] for i in range(n)}
@@ -401,42 +401,51 @@ class HairStrandsExtractor:
         strands = []
         
         # Find potential root nodes (high y coordinate = near scalp)
+        # Use top 20% (80th percentile) instead of top 10% for broader coverage
         y_coords = positions[:, 1]
-        root_threshold = np.percentile(y_coords, 90)  # Top 10%
+        root_threshold = np.percentile(y_coords, 80)
         root_candidates = np.where(y_coords >= root_threshold)[0]
 
-        # Cap root candidates to avoid runaway tracing on large point clouds
+        # Cap root candidates to the requested strand count
         max_roots = self.params.get('num_strands', 2000)
         if len(root_candidates) > max_roots:
-            root_candidates = np.random.choice(root_candidates, max_roots, replace=False)
+            # Prefer the highest points (most likely scalp)
+            root_candidates = root_candidates[np.argsort(-y_coords[root_candidates])][:max_roots]
 
+        def _try_trace(root_node):
+            if visited[root_node]:
+                return None
+            indices = self._trace_single_strand(root_node, positions, adjacency, visited)
+            if len(indices) < 3:
+                return None
+            pts = positions[indices]
+            cols = colors[indices] if len(colors) > 0 else np.ones((len(indices), 3)) * 0.3
+            return HairStrand(points=pts, radii=np.ones(len(indices)) * 0.001, colors=cols)
+
+        # Pass 1: trace from scalp roots (high-y points)
         for root_idx, root in enumerate(root_candidates):
             if self._cancel_flag:
                 break
-            if visited[root]:
-                continue
-
-            # Trace strand from this root
-            strand_indices = self._trace_single_strand(
-                root, positions, adjacency, visited
-            )
-            
-            if len(strand_indices) >= 3:
-                strand_points = positions[strand_indices]
-                strand_colors = colors[strand_indices] if len(colors) > 0 else np.ones((len(strand_indices), 3)) * 0.3
-                strand_radii = np.ones(len(strand_indices)) * 0.001  # Default radius
-                
-                strand = HairStrand(
-                    points=strand_points,
-                    radii=strand_radii,
-                    colors=strand_colors
-                )
-                strands.append(strand)
-            
+            s = _try_trace(root)
+            if s is not None:
+                strands.append(s)
             if callback and root_idx % 100 == 0:
-                progress = 0.5 + 0.4 * (root_idx / len(root_candidates))
-                callback(progress, f"Tracing strand {root_idx}/{len(root_candidates)}")
-        
+                prog = 0.5 + 0.35 * (root_idx / max(len(root_candidates), 1))
+                callback(prog, f"Tracing strand {root_idx}/{len(root_candidates)}")
+
+        # Pass 2: pick up unvisited clusters that weren't reachable from scalp roots
+        unvisited = np.where(~visited)[0]
+        if len(unvisited) > 0 and not self._cancel_flag:
+            # Sort by y descending, try every N-th point as an emergency root
+            step = max(1, len(unvisited) // max(10, max_roots // 10))
+            emergency_roots = unvisited[np.argsort(-y_coords[unvisited])][::step]
+            for root in emergency_roots[:max_roots // 4]:
+                if self._cancel_flag:
+                    break
+                s = _try_trace(root)
+                if s is not None:
+                    strands.append(s)
+
         return strands
     
     def _trace_single_strand(
