@@ -423,24 +423,17 @@ class FBXExporter:
             f'\tGeometry: {geometry_id}, "Geometry::{curve_name}", "NurbsCurve" {{',
         ])
         
-        # Control points
-        lines.append(f"\t\tPoints: *{num_points * 4} {{")
-        lines.append("\t\t\ta: ", )
-        
-        # Format control points (x, y, z, w)
+        # Control points  (x, y, z, w) — split into rows of 8 values each
         point_values = []
         for p in points:
             point_values.extend([f"{p[0]:.6f}", f"{p[1]:.6f}", f"{p[2]:.6f}", "1.000000"])
-        
-        # Split into lines of 8 values
-        for j in range(0, len(point_values), 8):
-            chunk = point_values[j:j+8]
-            prefix = "\t\t\ta: " if j == 0 else "\t\t\t"
-            suffix = "" if j + 8 >= len(point_values) else ","
-            lines[-1] = prefix + ",".join(chunk) + suffix
-            if j + 8 < len(point_values):
-                lines.append("")
-        
+
+        chunks = [point_values[i:i + 8] for i in range(0, len(point_values), 8)]
+        lines.append(f"\t\tPoints: *{num_points * 4} {{")
+        for k, chunk in enumerate(chunks):
+            prefix = "\t\t\ta: " if k == 0 else "\t\t\t"
+            suffix = "," if k < len(chunks) - 1 else ""
+            lines.append(prefix + ",".join(chunk) + suffix)
         lines.append("\t\t}")
         
         # Knot vector (open uniform)

@@ -121,22 +121,17 @@ class OutputPanel(ctk.CTkFrame):
         self.format_frame.grid_columnconfigure((0, 1), weight=1)
         
         self.format_var = ctk.StringVar(value="fbx")
-        
+        self.format_var.trace_add("write", self._on_format_changed)
+
         self.fbx_radio = ctk.CTkRadioButton(
-            self.format_frame,
-            text="Maya FBX Curves",
-            variable=self.format_var,
-            value="fbx",
-            font=ctk.CTkFont(size=12)
+            self.format_frame, text="Maya FBX Curves",
+            variable=self.format_var, value="fbx", font=ctk.CTkFont(size=12)
         )
         self.fbx_radio.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        
+
         self.glb_radio = ctk.CTkRadioButton(
-            self.format_frame,
-            text="Blender GLB",
-            variable=self.format_var,
-            value="glb",
-            font=ctk.CTkFont(size=12)
+            self.format_frame, text="Blender GLB",
+            variable=self.format_var, value="glb", font=ctk.CTkFont(size=12)
         )
         self.glb_radio.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         
@@ -152,48 +147,47 @@ class OutputPanel(ctk.CTkFrame):
         self.options_frame.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
         self.options_frame.grid_columnconfigure(1, weight=1)
         
-        # Scale factor
-        self.scale_label = ctk.CTkLabel(
+        # Scale preset
+        ctk.CTkLabel(self.options_frame, text="Scale Preset:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, padx=5, pady=3, sticky="w")
+        # Presets: (label, scale_value)
+        self._scale_presets = {
+            "Normalized (1×)": "1.0",
+            "Maya / cm (25×)": "25.0",
+            "Blender / m (0.25×)": "0.25",
+            "Custom": None,
+        }
+        self.scale_preset_menu = ctk.CTkOptionMenu(
             self.options_frame,
-            text="Scale:",
-            font=ctk.CTkFont(size=11)
+            values=list(self._scale_presets.keys()),
+            command=self._on_scale_preset,
+            width=160,
         )
-        self.scale_label.grid(row=0, column=0, padx=5, pady=3, sticky="w")
-        
-        self.scale_entry = ctk.CTkEntry(
-            self.options_frame,
-            width=80,
-            placeholder_text="1.0"
-        )
-        self.scale_entry.grid(row=0, column=1, padx=5, pady=3, sticky="w")
+        self.scale_preset_menu.grid(row=0, column=1, padx=5, pady=3, sticky="w")
+        self.scale_preset_menu.set("Normalized (1×)")
+
+        # Manual scale entry (shown for Custom)
+        ctk.CTkLabel(self.options_frame, text="Scale:", font=ctk.CTkFont(size=11)).grid(
+            row=1, column=0, padx=5, pady=3, sticky="w")
+        self.scale_entry = ctk.CTkEntry(self.options_frame, width=80, placeholder_text="1.0")
+        self.scale_entry.grid(row=1, column=1, padx=5, pady=3, sticky="w")
         self.scale_entry.insert(0, "1.0")
         
         # Up axis
-        self.axis_label = ctk.CTkLabel(
-            self.options_frame,
-            text="Up Axis:",
-            font=ctk.CTkFont(size=11)
-        )
-        self.axis_label.grid(row=1, column=0, padx=5, pady=3, sticky="w")
-        
+        ctk.CTkLabel(self.options_frame, text="Up Axis:", font=ctk.CTkFont(size=11)).grid(
+            row=2, column=0, padx=5, pady=3, sticky="w")
         self.axis_var = ctk.StringVar(value="Y")
         self.axis_menu = ctk.CTkOptionMenu(
-            self.options_frame,
-            variable=self.axis_var,
-            values=["Y", "Z"],
-            width=80
+            self.options_frame, variable=self.axis_var, values=["Y", "Z"], width=80
         )
-        self.axis_menu.grid(row=1, column=1, padx=5, pady=3, sticky="w")
-        
+        self.axis_menu.grid(row=2, column=1, padx=5, pady=3, sticky="w")
+
         # Include color
         self.color_var = ctk.BooleanVar(value=True)
-        self.color_check = ctk.CTkCheckBox(
-            self.options_frame,
-            text="Include Color",
-            variable=self.color_var,
-            font=ctk.CTkFont(size=11)
-        )
-        self.color_check.grid(row=2, column=0, columnspan=2, padx=5, pady=3, sticky="w")
+        ctk.CTkCheckBox(
+            self.options_frame, text="Include Color",
+            variable=self.color_var, font=ctk.CTkFont(size=11)
+        ).grid(row=3, column=0, columnspan=2, padx=5, pady=3, sticky="w")
         
         # Export button
         self.export_btn = ctk.CTkButton(
@@ -289,6 +283,25 @@ class OutputPanel(ctk.CTkFrame):
             self.quick_fbx_btn.configure(state="disabled")
             self.quick_glb_btn.configure(state="disabled")
     
+    def _on_scale_preset(self, choice: str):
+        """Apply preset scale value to the manual entry."""
+        val = self._scale_presets.get(choice)
+        if val is not None:
+            self.scale_entry.delete(0, "end")
+            self.scale_entry.insert(0, val)
+
+    def _on_format_changed(self, *_):
+        """Suggest sensible defaults when switching format."""
+        fmt = self.format_var.get()
+        if fmt == "fbx":
+            self.scale_preset_menu.set("Maya / cm (25×)")
+            self._on_scale_preset("Maya / cm (25×)")
+            self.axis_var.set("Y")
+        elif fmt == "glb":
+            self.scale_preset_menu.set("Blender / m (0.25×)")
+            self._on_scale_preset("Blender / m (0.25×)")
+            self.axis_var.set("Z")
+
     def _get_export_options(self):
         """Get current export options."""
         try:

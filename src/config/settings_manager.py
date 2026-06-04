@@ -13,7 +13,9 @@ from pathlib import Path
 DEFAULT_SETTINGS = {
     'num_iterations': 1000,
     'points_per_strand': 32,
-    'num_strands': 10000,
+    'num_strands': 2000,
+    'min_strand_length': 0.05,
+    'extraction_method': 'clustering',
     'theme': 'dark',
     'scale_factor': 1.0,
     'up_axis': 'Y',

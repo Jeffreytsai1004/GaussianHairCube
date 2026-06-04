@@ -872,7 +872,25 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(num_frame, text="Max strands:").pack(side="left")
         self.num_entry = ctk.CTkEntry(num_frame, width=100)
         self.num_entry.pack(side="right")
-        self.num_entry.insert(0, str(self.parent_window.settings.get('num_strands', 10000)))
+        self.num_entry.insert(0, str(self.parent_window.settings.get('num_strands', 2000)))
+
+        # Min strand length
+        minlen_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
+        minlen_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(minlen_frame, text="Min strand length:").pack(side="left")
+        self.minlen_entry = ctk.CTkEntry(minlen_frame, width=100)
+        self.minlen_entry.pack(side="right")
+        self.minlen_entry.insert(0, str(self.parent_window.settings.get('min_strand_length', 0.05)))
+
+        # Extraction method
+        method_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
+        method_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(method_frame, text="Extraction method:").pack(side="left")
+        self.method_menu = ctk.CTkOptionMenu(
+            method_frame, values=["clustering", "flow_field"], width=130
+        )
+        self.method_menu.pack(side="right")
+        self.method_menu.set(self.parent_window.settings.get('extraction_method', 'clustering'))
         
         # Appearance
         app_frame = ctk.CTkFrame(self)
@@ -1003,38 +1021,47 @@ class SettingsDialog(ctk.CTkToplevel):
             num_iterations = int(self.iter_entry.get())
             points_per_strand = int(self.pts_entry.get())
             num_strands = int(self.num_entry.get())
+            min_strand_length = float(self.minlen_entry.get())
             if num_iterations <= 0 or points_per_strand <= 0 or num_strands <= 0:
                 raise ValueError("Values must be positive")
+            if min_strand_length < 0:
+                raise ValueError("Min strand length must be ≥ 0")
         except ValueError as exc:
-            # Show inline error in status (avoid hard dependency on CTkMessagebox here)
             try:
                 from CTkMessagebox import CTkMessagebox
                 CTkMessagebox(
-                    master=self,
-                    title="Invalid Settings",
-                    message=f"Please enter positive integers.\n{exc}",
-                    icon="cancel"
+                    master=self, title="Invalid Settings",
+                    message=f"Please check your inputs.\n{exc}", icon="cancel"
                 )
             except Exception:
                 pass
             return
 
         parent = self.parent_window
+        extraction_method = self.method_menu.get() if hasattr(self, 'method_menu') else 'clustering'
 
-        # Apply to processors if methods exist
+        # Apply to processors
         if hasattr(parent.gaussian_generator, 'set_parameters'):
             parent.gaussian_generator.set_parameters(num_iterations=num_iterations)
 
         if hasattr(parent.strand_extractor, 'set_parameters'):
+            from src.core.hair_strands import StrandExtractionMethod
+            method_enum = (StrandExtractionMethod.FLOW_FIELD
+                           if extraction_method == 'flow_field'
+                           else StrandExtractionMethod.CLUSTERING)
             parent.strand_extractor.set_parameters(
                 points_per_strand=points_per_strand,
-                num_strands=num_strands
+                num_strands=num_strands,
+                min_strand_length=min_strand_length,
+                method=method_enum,
             )
 
         # Update in-memory settings dict
         parent.settings['num_iterations'] = num_iterations
         parent.settings['points_per_strand'] = points_per_strand
         parent.settings['num_strands'] = num_strands
+        parent.settings['min_strand_length'] = min_strand_length
+        parent.settings['extraction_method'] = extraction_method
         parent.settings['theme'] = self.theme_menu.get().lower()
         parent.settings['hf_endpoint'] = self.mirror_entry.get().strip() if hasattr(self, 'mirror_entry') else ''
 
