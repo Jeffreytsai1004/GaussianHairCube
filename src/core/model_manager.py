@@ -1,10 +1,37 @@
 """
 Model manager: checks local HuggingFace cache and provides download progress callbacks.
+
+HuggingFace mirror
+------------------
+If the environment variable HF_ENDPOINT is set, the HuggingFace libraries
+automatically use that endpoint.  Users can also configure a mirror via
+Settings → AI 模型 → 镜像地址 (stored in settings.json as "hf_endpoint").
+
+Popular mirrors for China:
+  https://hf-mirror.com
 """
 import os
 import threading
 from pathlib import Path
 from typing import Callable, Optional
+
+
+def apply_hf_mirror():
+    """
+    Apply the HuggingFace endpoint from settings (or HF_ENDPOINT env var).
+    Call once at startup or before any model download.
+    """
+    # Env var takes priority (allows CI/CD or advanced users to override)
+    if os.environ.get('HF_ENDPOINT'):
+        return
+
+    try:
+        from src.config.settings_manager import load_settings
+        endpoint = load_settings().get('hf_endpoint', '').strip()
+        if endpoint:
+            os.environ['HF_ENDPOINT'] = endpoint
+    except Exception:
+        pass
 
 # The two models used by the app
 MODELS = {
@@ -89,6 +116,9 @@ def download_models(
 
     Returns True if all models downloaded successfully, False on error/cancel.
     """
+    # Apply mirror before any HF network call
+    apply_hf_mirror()
+
     try:
         from transformers import (
             SegformerImageProcessor, SegformerForSemanticSegmentation,

@@ -742,7 +742,17 @@ class SettingsDialog(ctk.CTkToplevel):
             text="预下载 AI 模型",
             command=self._predownload_models,
         )
-        predownload_btn.pack(padx=10, pady=(0, 10), anchor="w")
+        predownload_btn.pack(padx=10, pady=(0, 6), anchor="w")
+
+        # HuggingFace mirror
+        mirror_row = ctk.CTkFrame(models_frame, fg_color="transparent")
+        mirror_row.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkLabel(mirror_row, text="镜像地址:", font=ctk.CTkFont(size=11)).pack(side="left")
+        self.mirror_entry = ctk.CTkEntry(mirror_row, placeholder_text="https://hf-mirror.com（留空用官方）")
+        self.mirror_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        saved_mirror = self.parent_window.settings.get('hf_endpoint', '')
+        if saved_mirror:
+            self.mirror_entry.insert(0, saved_mirror)
 
         # Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -853,6 +863,14 @@ class SettingsDialog(ctk.CTkToplevel):
         parent.settings['points_per_strand'] = points_per_strand
         parent.settings['num_strands'] = num_strands
         parent.settings['theme'] = self.theme_menu.get().lower()
+        parent.settings['hf_endpoint'] = getattr(self, 'mirror_entry', None) and self.mirror_entry.get().strip() or ''
+
+        # Apply mirror immediately so any subsequent download uses it
+        try:
+            from src.core.model_manager import apply_hf_mirror
+            apply_hf_mirror()
+        except Exception:
+            pass
 
         # Persist to disk
         settings_manager.save_settings(parent.settings)

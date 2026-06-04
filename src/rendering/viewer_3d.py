@@ -362,67 +362,106 @@ class Viewer3D:
         return (screen_x, screen_y, depth)
     
     def _render_gaussians_software(self, image: np.ndarray, mvp: np.ndarray):
-        """Software render Gaussian points."""
-        if self.gaussian_positions is None:
+        """Vectorized software render for Gaussian points."""
+        if self.gaussian_positions is None or len(self.gaussian_positions) == 0:
             return
-        
-        points_with_depth = []
-        
-        for i, pos in enumerate(self.gaussian_positions):
-            projected = self._project_point(pos, mvp)
-            if projected is not None:
-                x, y, depth = projected
-                color = self.gaussian_colors[i] if self.gaussian_colors is not None else np.array([0.5, 0.5, 0.5])
-                points_with_depth.append((x, y, depth, color))
-        
-        # Sort by depth (back to front)
-        points_with_depth.sort(key=lambda p: -p[2])
-        
-        # Draw points
-        point_size = int(self.point_size)
-        
-        for x, y, depth, color in points_with_depth:
-            if 0 <= x < self.width and 0 <= y < self.height:
-                # Draw a small circle
-                for dy in range(-point_size, point_size + 1):
-                    for dx in range(-point_size, point_size + 1):
-                        if dx*dx + dy*dy <= point_size*point_size:
-                            px, py = x + dx, y + dy
-                            if 0 <= px < self.width and 0 <= py < self.height:
-                                rgb = (color * 255).astype(np.uint8)
-                                image[py, px, :3] = rgb
-    
+
+        n = len(self.gaussian_positions)
+        colors = self.gaussian_colors if self.gaussian_colors is not None else np.full((n, 3), 0.5, dtype=np.float32)
+
+        # Batch homogeneous projection: (N, 4) @ (4, 4)^T = (N, 4)
+        pos_h = np.ones((n, 4), dtype=np.float32)
+        pos_h[:, :3] = self.gaussian_positions
+        clip = (mvp @ pos_h.T).T  # (N, 4)
+
+        # Keep points in front of camera
+        valid = clip[:, 3] > 1e-6
+        if not np.any(valid):
+            return
+
+        clip_v = clip[valid]
+        colors_v = colors[valid]
+
+        w = clip_v[:, 3:4]
+        ndc = clip_v[:, :3] / w  # (M, 3)
+
+        # Frustum cull (slightly relaxed to catch partially-visible points)
+        in_view = np.all(np.abs(ndc[:, :2]) <= 1.5, axis=1)
+        ndc = ndc[in_view]
+        colors_v = colors_v[in_view]
+        if len(ndc) == 0:
+            return
+
+        # Screen-space integer coords (will be clipped when writing)
+        sx = ((ndc[:, 0] + 1) * 0.5 * self.width).astype(np.int32)
+        sy = ((1.0 - ndc[:, 1]) * 0.5 * self.height).astype(np.int32)
+
+        # Back-to-front depth sort
+        order = np.argsort(-ndc[:, 2])
+        sx = sx[order]
+        sy = sy[order]
+        rgb = (np.clip(colors_v[order], 0.0, 1.0) * 255).astype(np.uint8)
+
+        ps = max(1, int(self.point_size))
+        if ps == 1:
+            # Fast path: one pixel per point
+            in_bounds = (sx >= 0) & (sx < self.width) & (sy >= 0) & (sy < self.height)
+            image[sy[in_bounds], sx[in_bounds], :3] = rgb[in_bounds]
+        else:
+            # Precompute disc offsets once
+            r = ps
+            dy_arr, dx_arr = np.mgrid[-r:r+1, -r:r+1]
+            disc = dy_arr*dy_arr + dx_arr*dx_arr <= r*r
+            offsets = np.column_stack([dy_arr[disc], dx_arr[disc]])
+            for ody, odx in offsets:
+                psx = sx + odx
+                psy = sy + ody
+                in_bounds = (psx >= 0) & (psx < self.width) & (psy >= 0) & (psy < self.height)
+                image[psy[in_bounds], psx[in_bounds], :3] = rgb[in_bounds]
+
     def _render_curves_software(self, image: np.ndarray, mvp: np.ndarray):
-        """Software render hair curves."""
+        """Software render hair curves (vectorized projection, Bresenham segments)."""
         if self.curve_positions is None:
             return
-        
+
         for curve_idx, curve in enumerate(self.curve_positions):
-            colors = self.curve_colors[curve_idx] if self.curve_colors else None
-            
-            prev_screen = None
-            prev_color = None
-            
-            for i, pos in enumerate(curve):
-                projected = self._project_point(pos, mvp)
-                
-                if projected is not None:
-                    x, y, depth = projected
-                    color = colors[i] if colors is not None else np.array([0.3, 0.2, 0.1])
-                    
-                    if prev_screen is not None:
-                        # Draw line from prev to current
+            n = len(curve)
+            if n < 2:
+                continue
+
+            colors = self.curve_colors[curve_idx] if self.curve_colors else np.full((n, 3), 0.3, dtype=np.float32)
+
+            # Batch-project all curve points at once
+            pos_h = np.ones((n, 4), dtype=np.float32)
+            pos_h[:, :3] = curve
+            clip = (mvp @ pos_h.T).T  # (n, 4)
+
+            screen_pts = [None] * n
+            for i in range(n):
+                w = clip[i, 3]
+                if w <= 1e-6:
+                    continue
+                ndc = clip[i, :3] / w
+                if np.any(np.abs(ndc[:2]) > 1.5):
+                    continue
+                screen_pts[i] = (
+                    int((ndc[0] + 1) * 0.5 * self.width),
+                    int((1.0 - ndc[1]) * 0.5 * self.height),
+                )
+
+            prev_i = None
+            for i in range(n):
+                if screen_pts[i] is not None:
+                    if prev_i is not None:
                         self._draw_line(
                             image,
-                            prev_screen[0], prev_screen[1],
-                            x, y,
-                            prev_color, color
+                            screen_pts[prev_i][0], screen_pts[prev_i][1],
+                            screen_pts[i][0], screen_pts[i][1],
+                            colors[prev_i], colors[i],
                         )
-                    
-                    prev_screen = (x, y)
-                    prev_color = color
+                    prev_i = i
                 else:
-                    prev_screen = None
+                    prev_i = None
     
     def _draw_line(
         self,

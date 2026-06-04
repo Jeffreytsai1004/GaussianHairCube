@@ -19,7 +19,9 @@ DEFAULT_SETTINGS = {
     'up_axis': 'Y',
     'include_color': True,
     'format_type': 'fbx',
-    'max_video_frames': 40,
+    # HuggingFace endpoint — leave empty to use the default (huggingface.co).
+    # Chinese users can set this to "https://hf-mirror.com" for faster downloads.
+    'hf_endpoint': '',
 }
 
 
