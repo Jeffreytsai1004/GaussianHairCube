@@ -303,14 +303,11 @@ class OutputPanel(ctk.CTkFrame):
 
     def _update_export_state(self):
         """Update export button state based on available data."""
-        if self.hair_strands is not None:
-            self.export_btn.configure(state="normal")
-            self.quick_fbx_btn.configure(state="normal")
-            self.quick_glb_btn.configure(state="normal")
-        else:
-            self.export_btn.configure(state="disabled")
-            self.quick_fbx_btn.configure(state="disabled")
-            self.quick_glb_btn.configure(state="disabled")
+        has_strands = self.hair_strands is not None and self.hair_strands.num_strands > 0
+        state = "normal" if has_strands else "disabled"
+        self.export_btn.configure(state=state)
+        self.quick_fbx_btn.configure(state=state)
+        self.quick_glb_btn.configure(state=state)
     
     def _on_scale_preset(self, choice: str):
         """Apply preset scale value to the manual entry."""

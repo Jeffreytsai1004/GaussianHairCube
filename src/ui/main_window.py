@@ -612,25 +612,46 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             self._apply_state(AppState.GAUSSIANS_READY)
 
         self.extract_btn.configure(state="normal")
-        self.edit_btn.configure(state="normal")   # edit available once cloud exists
-        self.status_label.configure(text=f"Generated {cloud.num_splats} Gaussians")
+        self.edit_btn.configure(state="normal")
+
+        if cloud.num_splats < 100:
+            self.status_label.configure(
+                text=f"警告：仅生成 {cloud.num_splats} 个高斯点（建议 ≥1000）"
+            )
+        else:
+            self.status_label.configure(text=f"生成完成：{cloud.num_splats} 个高斯点")
     
     def _on_curves_extracted(self, strands: HairStrandCollection):
         """Handle curves extracted."""
         self.current_strands = strands
 
-        # Update viewer
-        self.viewer.set_curve_data(strands)
-        self.viewer._set_view_mode(ViewMode.CURVES)
-
-        # Update output panel
         self.output_panel.set_strand_data(strands)
-
-        # Update status
         self._apply_state(AppState.DONE)
-        self.status_label.configure(
-            text=f"Extracted {strands.num_strands} strands ({strands.total_points} points)"
-        )
+
+        if strands.num_strands == 0:
+            # Friendly guidance instead of silent empty result
+            self.status_label.configure(
+                text="未提取到发丝 — 尝试调整 Settings 中的最小发丝长度或提取方法"
+            )
+            try:
+                from CTkMessagebox import CTkMessagebox
+                CTkMessagebox(
+                    master=self,
+                    title="发丝提取结果为空",
+                    message="未提取到任何发丝曲线。\n\n建议：\n"
+                            "• 降低 Settings → Min strand length\n"
+                            "• 切换提取方法为 flow_field\n"
+                            "• 确认高斯点云包含足够多的点",
+                    icon="warning",
+                )
+            except Exception:
+                pass
+        else:
+            self.viewer.set_curve_data(strands)
+            self.viewer._set_view_mode(ViewMode.CURVES)
+            self.status_label.configure(
+                text=f"提取完成：{strands.num_strands} 条发丝，{strands.total_points} 个点"
+            )
     
     def _on_processing_error(self, error: str):
         """Handle processing error."""
