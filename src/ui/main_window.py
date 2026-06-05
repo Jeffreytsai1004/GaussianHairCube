@@ -39,6 +39,7 @@ from src.ui.viewer_widget import ViewerWidget
 from src.core.gaussian_generator import GaussianGenerator, GaussianCloud
 from src.core.hair_strands import HairStrandsExtractor, HairStrandCollection
 from src.core.geometry_controller import GeometryController, GeometryBrush, ControlMode
+from src.core.batch_processor import BatchProcessor
 from src.rendering.viewer_3d import ViewMode
 from src.config import settings_manager
 
@@ -85,6 +86,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.gaussian_generator = GaussianGenerator()
         self.strand_extractor = HairStrandsExtractor()
         self.geometry_controller = GeometryController()
+        self.batch_processor = BatchProcessor(self.gaussian_generator, self.strand_extractor)
 
         # State
         self.current_cloud: Optional[GaussianCloud] = None
@@ -167,6 +169,19 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         )
         self.subtitle_label.grid(row=0, column=1, padx=10, pady=10, sticky="w")
         
+        # Batch processing button
+        self.batch_btn = ctk.CTkButton(
+            self.header_frame,
+            text="📋 批量",
+            width=72,
+            height=36,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray30",
+            hover_color="gray20",
+            command=self._show_batch_dialog,
+        )
+        self.batch_btn.grid(row=0, column=2, padx=(0, 4), pady=10)
+
         # Settings button
         self.settings_btn = ctk.CTkButton(
             self.header_frame,
@@ -178,7 +193,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             hover_color="gray30",
             command=self._show_settings
         )
-        self.settings_btn.grid(row=0, column=2, padx=10, pady=10)
+        self.settings_btn.grid(row=0, column=3, padx=10, pady=10)
     
     def _create_processing_controls(self):
         """Create processing control buttons."""
@@ -843,6 +858,12 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         """Show settings dialog."""
         settings_window = SettingsDialog(self)
         settings_window.grab_set()
+
+    def _show_batch_dialog(self):
+        """Open the batch processing queue dialog."""
+        from src.ui.batch_dialog import BatchDialog
+        dlg = BatchDialog(self, self.batch_processor)
+        dlg.grab_set()
 
 
 class SettingsDialog(ctk.CTkToplevel):
