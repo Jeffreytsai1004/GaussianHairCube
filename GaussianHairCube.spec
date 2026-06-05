@@ -24,12 +24,19 @@ hiddenimports = [
     'sklearn', 'sklearn.cluster', 'sklearn.neighbors',
     # Vision
     'cv2',
+    # 3-D rendering
+    'moderngl', 'pyrr', 'OpenGL', 'OpenGL.GL',
+    'pyglet',
+    # Geometry / mesh
+    'trimesh', 'trimesh.transformations',
     # Export
     'pygltflib',
-    # Config / new modules
+    # App modules (all must be explicit for PyInstaller)
     'src.config.settings_manager',
     'src.core.model_manager',
     'src.core.multiview_reconstruction',
+    'src.core.geometry_controller',
+    'src.core.project_io',
     'src.ui.model_download_dialog',
     # HuggingFace (optional — only bundled if installed)
     'huggingface_hub', 'huggingface_hub.utils', 'safetensors',

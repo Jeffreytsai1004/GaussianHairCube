@@ -34,24 +34,23 @@ class OutputPanel(ctk.CTkFrame):
         self, 
         parent,
         on_export_complete: Optional[Callable] = None,
+        on_project_loaded: Optional[Callable] = None,
         **kwargs
     ):
         """
         Initialize the output panel.
-        
-        Args:
-            parent: Parent widget
-            on_export_complete: Callback when export completes
-            **kwargs: Additional arguments for CTkFrame
+
+        on_project_loaded(cloud, strands) — called when a .ghc file is loaded.
         """
         super().__init__(parent, **kwargs)
-        
+
         self.on_export_complete = on_export_complete
-        
+        self.on_project_loaded = on_project_loaded
+
         # Data references
         self.gaussian_cloud: Optional[GaussianCloud] = None
         self.hair_strands: Optional[HairStrandCollection] = None
-        
+
         # Export state
         self.is_exporting = False
         
@@ -245,7 +244,31 @@ class OutputPanel(ctk.CTkFrame):
             state="disabled"
         )
         self.quick_glb_btn.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
-    
+
+        # Project save / load section
+        ctk.CTkLabel(
+            self, text="Project:", font=ctk.CTkFont(size=13, weight="bold")
+        ).grid(row=10, column=0, padx=10, pady=(15, 5), sticky="w")
+
+        proj_frame = ctk.CTkFrame(self, fg_color="transparent")
+        proj_frame.grid(row=11, column=0, padx=10, pady=5, sticky="ew")
+        proj_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.save_proj_btn = ctk.CTkButton(
+            proj_frame, text="💾 Save .ghc",
+            command=self._save_project,
+            height=32, fg_color="#1565c0", hover_color="#0d47a1",
+            state="disabled"
+        )
+        self.save_proj_btn.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
+
+        self.load_proj_btn = ctk.CTkButton(
+            proj_frame, text="📂 Load .ghc",
+            command=self._load_project,
+            height=32, fg_color="gray40", hover_color="gray30"
+        )
+        self.load_proj_btn.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
+
     def set_gaussian_data(self, cloud: GaussianCloud):
         """Set Gaussian cloud data."""
         self.gaussian_cloud = cloud
@@ -258,20 +281,26 @@ class OutputPanel(ctk.CTkFrame):
         )
         
         self._update_export_state()
-    
+        self._update_save_state()
+
     def set_strand_data(self, strands: HairStrandCollection):
         """Set hair strand data."""
         self.hair_strands = strands
-        
-        # Update status
+
         self.curves_icon.configure(text="🟢")
         self.curves_status.configure(
             text=f"Curves: {strands.num_strands} strands ({strands.total_points} points)",
             text_color="white"
         )
-        
+
         self._update_export_state()
+        self._update_save_state()
     
+    def _update_save_state(self):
+        """Enable Save .ghc button when at least a cloud exists."""
+        has_data = self.gaussian_cloud is not None or self.hair_strands is not None
+        self.save_proj_btn.configure(state="normal" if has_data else "disabled")
+
     def _update_export_state(self):
         """Update export button state based on available data."""
         if self.hair_strands is not None:
@@ -458,18 +487,63 @@ class OutputPanel(ctk.CTkFrame):
         """Clear all data."""
         self.gaussian_cloud = None
         self.hair_strands = None
-        
-        # Reset status
+
         self.gaussian_icon.configure(text="⚪")
-        self.gaussian_status.configure(
-            text="Gaussians: Not generated",
-            text_color="gray60"
-        )
-        
+        self.gaussian_status.configure(text="Gaussians: Not generated", text_color="gray60")
         self.curves_icon.configure(text="⚪")
-        self.curves_status.configure(
-            text="Curves: Not extracted",
-            text_color="gray60"
-        )
-        
+        self.curves_status.configure(text="Curves: Not extracted", text_color="gray60")
+
         self._update_export_state()
+        self._update_save_state()
+
+    # ------------------------------------------------------------------
+    # Project save / load
+    # ------------------------------------------------------------------
+
+    def _save_project(self):
+        """Save current cloud + strands to a .ghc file."""
+        if self.gaussian_cloud is None and self.hair_strands is None:
+            return
+        filepath = filedialog.asksaveasfilename(
+            title="Save Project",
+            defaultextension=".ghc",
+            filetypes=[("GaussianHairCube Project", "*.ghc"), ("All files", "*.*")],
+            initialfile="project.ghc",
+        )
+        if not filepath:
+            return
+        from src.core.project_io import save_project
+        ok = save_project(filepath, self.gaussian_cloud, self.hair_strands)
+        msg = f"✓ Project saved: {Path(filepath).name}" if ok else "✗ Save failed"
+        self.progress_label.configure(text=msg)
+        self.progress_frame.grid()
+        self.after(3000, self._hide_progress)
+
+    def _load_project(self):
+        """Load a .ghc project file and notify the main window via callback."""
+        filepath = filedialog.askopenfilename(
+            title="Load Project",
+            filetypes=[("GaussianHairCube Project", "*.ghc"), ("All files", "*.*")],
+        )
+        if not filepath:
+            return
+        from src.core.project_io import load_project
+        cloud, strands, meta = load_project(filepath)
+        if cloud is None and strands is None:
+            self.progress_label.configure(text="✗ Failed to load project")
+            self.progress_frame.grid()
+            self.after(4000, self._hide_progress)
+            return
+
+        if cloud is not None:
+            self.set_gaussian_data(cloud)
+        if strands is not None:
+            self.set_strand_data(strands)
+
+        n_s, n_c = meta.get("num_splats", 0), meta.get("num_strands", 0)
+        self.progress_label.configure(text=f"✓ Loaded: {n_s} splats, {n_c} strands")
+        self.progress_frame.grid()
+        self.after(3000, self._hide_progress)
+
+        if hasattr(self, 'on_project_loaded') and self.on_project_loaded:
+            self.on_project_loaded(cloud, strands)

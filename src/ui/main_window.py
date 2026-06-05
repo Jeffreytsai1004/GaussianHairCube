@@ -136,7 +136,8 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Output panel (right)
         self.output_panel = OutputPanel(
             self,
-            on_export_complete=self._on_export_complete
+            on_export_complete=self._on_export_complete,
+            on_project_loaded=self._on_project_loaded,
         )
         self.output_panel.grid(row=1, column=2, padx=10, pady=10, sticky="nsew")
         
@@ -641,6 +642,27 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         except Exception:
             pass  # CTkMessagebox not installed; status label already updated
     
+    def _on_project_loaded(self, cloud, strands):
+        """Restore viewer and state after a .ghc project is loaded."""
+        if cloud is not None:
+            self.current_cloud = cloud
+            self.viewer.set_gaussian_data(cloud)
+            self.edit_btn.configure(state="normal")
+
+        if strands is not None:
+            self.current_strands = strands
+            self.viewer.set_curve_data(strands)
+
+        if cloud is not None and strands is not None:
+            self.viewer._set_view_mode(ViewMode.CURVES)
+        elif cloud is not None:
+            self.viewer._set_view_mode(ViewMode.GAUSSIANS)
+
+        self._apply_state(AppState.DONE)
+        n_s = cloud.num_splats if cloud else 0
+        n_c = strands.num_strands if strands else 0
+        self.status_label.configure(text=f"Project loaded — {n_s} splats, {n_c} strands")
+
     def _on_export_complete(self, success: bool, filepath: str):
         """Handle export complete."""
         if success:
