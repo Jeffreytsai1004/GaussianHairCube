@@ -37,7 +37,9 @@ hiddenimports = [
     'src.core.multiview_reconstruction',
     'src.core.geometry_controller',
     'src.core.project_io',
+    'src.core.batch_processor',
     'src.ui.model_download_dialog',
+    'src.ui.batch_dialog',
     # HuggingFace (optional — only bundled if installed)
     'huggingface_hub', 'huggingface_hub.utils', 'safetensors',
 ]
