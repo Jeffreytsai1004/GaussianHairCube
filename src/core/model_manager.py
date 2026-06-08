@@ -10,10 +10,13 @@ Settings → AI 模型 → 镜像地址 (stored in settings.json as "hf_endpoint
 Popular mirrors for China:
   https://hf-mirror.com
 """
+import logging
 import os
 import threading
 from pathlib import Path
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def apply_hf_mirror():
@@ -32,6 +35,58 @@ def apply_hf_mirror():
             os.environ['HF_ENDPOINT'] = endpoint
     except Exception:
         pass
+
+
+def _summarise_download_error(exc: Exception) -> str:
+    """
+    Translate a raw HF / requests / OS exception into a short, actionable
+    message suitable for displaying in a small dialog.  The full traceback
+    is always logged separately.
+    """
+    s = f"{type(exc).__name__}: {exc}"
+    low = s.lower()
+
+    # Connectivity / DNS / firewall — almost always means HF is blocked or slow
+    if any(token in low for token in (
+        "max retries", "connection", "timeout", "name or service",
+        "failed to resolve", "getaddrinfo", "name resolution",
+        "newconnectionerror", "remotedisconnected", "connectionreseterror",
+    )):
+        endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+        if "huggingface.co" in endpoint:
+            return (
+                "网络无法连接 HuggingFace 官方源。\n"
+                "建议：Settings → AI 模型 → 镜像地址填 https://hf-mirror.com"
+            )
+        return f"网络连接失败（当前端点：{endpoint}）。请检查网络或更换镜像。"
+
+    # SSL
+    if "ssl" in low or "certificate" in low:
+        return "SSL 证书验证失败。建议升级 certifi：pip install -U certifi"
+
+    # 401/403/private models
+    if "401" in s or "unauthorized" in low or "403" in s:
+        return "访问被拒绝（401/403）。模型可能需要登录，或镜像源已过期。"
+
+    # 404 — model not found at endpoint
+    if "404" in s or "not found" in low or "repository not found" in low:
+        endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+        return f"模型在 {endpoint} 找不到。镜像可能不包含此模型，请换源或用官方源。"
+
+    # Disk space
+    if "no space" in low or "disk full" in low:
+        return "磁盘空间不足。请清理空间后重试。"
+
+    # Permission
+    if "permission" in low or "errno 13" in low:
+        return "权限不足。请检查 ~/.cache/huggingface 是否可写。"
+
+    # transformers missing
+    if "no module named" in low and "transformers" in low:
+        return "transformers 未安装，请运行 pip install -r requirements.txt"
+
+    # Fallback: return the short exception text (truncated)
+    return s if len(s) <= 160 else s[:160] + "…"
 
 # The two models used by the app
 MODELS = {
@@ -196,6 +251,10 @@ def download_models(
 
             try:
                 # Actual download (blocking) — uses HF transformers cache
+                logger.info(
+                    "Downloading %s from endpoint=%s",
+                    repo_id, os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
+                )
                 model_info["loader"](repo_id)
             finally:
                 _sim_stop.set()
@@ -203,10 +262,15 @@ def download_models(
 
             if progress_callback:
                 progress_callback(progress_base + weight, f"✓ {name} 下载完成")
+            logger.info("Successfully downloaded %s", repo_id)
 
         except Exception as e:
+            # Full traceback to the log file / log window
+            logger.exception("Download of %s failed", repo_id)
+            short = _summarise_download_error(e)
             if progress_callback:
-                progress_callback(progress_base, f"✗ {name} 下载失败: {e}")
+                # Show a friendly summary in the dialog; full details are in the log
+                progress_callback(progress_base, f"✗ {name} 下载失败：{short}")
             return False
 
         progress_base += weight

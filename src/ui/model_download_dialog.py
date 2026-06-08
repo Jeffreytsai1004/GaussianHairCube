@@ -146,6 +146,9 @@ class ModelDownloadDialog(ctk.CTkToplevel):
 
     def _thread_safe_progress(self, progress: float, message: str):
         """Called from download thread — must use after() to update UI."""
+        # Remember the most-recent message so failure shows the actual cause
+        # (the previous version overwrote it with a generic "下载失败" string).
+        self._last_message = message
         self.after(0, lambda p=progress, m=message: self._update_progress(p, m))
 
     def _update_progress(self, progress: float, message: str):
@@ -160,9 +163,56 @@ class ModelDownloadDialog(ctk.CTkToplevel):
             self._update_progress(1.0, "✓ 所有模型下载完成！正在启动处理...")
             self.after(800, self._close_and_complete)
         else:
-            self._update_progress(0.0, "✗ 下载失败，请检查网络连接后重试")
+            # Preserve the actionable error from the last progress callback
+            last = getattr(self, "_last_message", "") or "下载失败，请查看日志"
+            if not last.startswith("✗"):
+                last = "✗ " + last
+            self._status_label.configure(
+                text=last, text_color="#f44336", wraplength=460, justify="left",
+            )
+            self._progress_bar.set(0)
             self._download_btn.configure(state="normal", text="重试")
             self._cancel_btn.configure(text="关闭")
+            self._show_failure_extras()
+
+    def _show_failure_extras(self):
+        """Add 查看日志 / 配置镜像 buttons after the first failure."""
+        if getattr(self, "_extras_shown", False):
+            return
+        self._extras_shown = True
+
+        extras = ctk.CTkFrame(self, fg_color="transparent")
+        extras.pack(pady=(0, 8))
+
+        def open_log():
+            try:
+                from src.ui.log_window import LogWindow
+                LogWindow(self)
+            except Exception:
+                pass
+
+        def open_mirror_settings():
+            try:
+                parent = self.master
+                # Walk up to a window that owns _show_settings
+                while parent is not None and not hasattr(parent, "_show_settings"):
+                    parent = parent.master
+                if parent is not None:
+                    parent._show_settings()
+            except Exception:
+                pass
+
+        ctk.CTkButton(
+            extras, text="📋 查看日志", width=110, height=28,
+            fg_color="gray35", hover_color="gray25",
+            command=open_log,
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            extras, text="⚙ 配置镜像", width=110, height=28,
+            fg_color="gray35", hover_color="gray25",
+            command=open_mirror_settings,
+        ).pack(side="left", padx=4)
 
     def _close_and_complete(self):
         self.grab_release()
