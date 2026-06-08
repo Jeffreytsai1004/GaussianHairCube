@@ -13,11 +13,13 @@ class ModelDownloadDialog(ctk.CTkToplevel):
     Automatically closes when download completes successfully.
     """
 
-    def __init__(self, parent, models_to_download: list, on_complete=None, on_cancel=None):
+    def __init__(self, parent, models_to_download: list, on_complete=None, on_cancel=None,
+                 auto_start: bool = False):
         """
         models_to_download: list of dicts with keys: display_name, repo_id, approx_size_mb
         on_complete: callback() called when download finishes successfully (main thread)
         on_cancel: callback() called when user cancels (main thread)
+        auto_start: if True, kick off the download immediately after the dialog opens
         """
         super().__init__(parent)
 
@@ -111,6 +113,10 @@ class ModelDownloadDialog(ctk.CTkToplevel):
             command=self._on_user_close,
         )
         self._cancel_btn.pack(side="left", padx=8)
+
+        # Auto-start: schedule download right after the window has rendered
+        if auto_start:
+            self.after(150, self._start_download)
 
     def _center_on_parent(self):
         parent = self.master

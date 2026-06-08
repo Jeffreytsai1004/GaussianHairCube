@@ -194,31 +194,65 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         banner.grid_columnconfigure(0, weight=1)
         banner.grid_propagate(False)
 
-        msg = (
-            f"⚠️  AI 模型未下载（共 ~{total_mb} MB）— 处理前需要先下载，"
-            "或在 Settings → AI 模型 中配置镜像源"
-        )
+        msg = f"⚠️  AI 模型未下载（共 ~{total_mb} MB）— 处理前需要先下载"
         ctk.CTkLabel(
             banner, text=msg, font=ctk.CTkFont(size=12),
             text_color="white", anchor="w",
         ).grid(row=0, column=0, padx=14, pady=8, sticky="w")
 
-        def _open_and_close():
+        def _one_click_download():
+            banner.destroy()
+            self._launch_model_download(auto_start=True)
+
+        def _open_settings_for_mirror():
             banner.destroy()
             self._show_settings()
 
         ctk.CTkButton(
-            banner, text="⬇ 立即下载", command=_open_and_close,
+            banner, text="⬇ 一键下载", command=_one_click_download,
             height=28, width=110,
             fg_color="#ff9800", hover_color="#f57c00",
             font=ctk.CTkFont(size=12, weight="bold"),
         ).grid(row=0, column=1, padx=(8, 4), pady=8)
 
         ctk.CTkButton(
+            banner, text="⚙ 镜像设置", command=_open_settings_for_mirror,
+            height=28, width=92,
+            fg_color="gray35", hover_color="gray25",
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=2, padx=(0, 4), pady=8)
+
+        ctk.CTkButton(
             banner, text="✕", command=banner.destroy,
             height=28, width=34,
             fg_color="transparent", hover_color="#7c4d00",
-        ).grid(row=0, column=2, padx=(0, 8), pady=8)
+        ).grid(row=0, column=3, padx=(0, 8), pady=8)
+
+    def _launch_model_download(self, auto_start: bool = False):
+        """Open the ModelDownloadDialog with the currently missing models.
+
+        Used by both the first-launch banner (auto_start=True) and any
+        future caller that wants the same low-friction path.
+        """
+        try:
+            from src.core.model_manager import (
+                apply_hf_mirror, get_models_to_download, get_all_models_status,
+            )
+            apply_hf_mirror()        # respect user-configured mirror
+            missing = get_models_to_download()
+            all_models = get_all_models_status()
+        except Exception:
+            logger.exception("Could not query model status")
+            return
+
+        from src.ui.model_download_dialog import ModelDownloadDialog
+        ModelDownloadDialog(
+            parent=self,
+            models_to_download=missing if missing else all_models,
+            on_complete=None,
+            on_cancel=None,
+            auto_start=auto_start,
+        )
 
     def _create_widgets(self):
         """Create main window widgets."""
@@ -1245,6 +1279,7 @@ class SettingsDialog(ctk.CTkToplevel):
             models_to_download=missing if missing else all_models,
             on_complete=self._refresh_models_status,
             on_cancel=None,
+            auto_start=True,           # the button is named "一键下载" — honour that
         )
 
     def _change_theme(self, value):
