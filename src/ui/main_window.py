@@ -210,7 +210,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Subtitle
         self.subtitle_label = ctk.CTkLabel(
             self.header_frame,
-            text="Hair Reconstruction with Strand-Aligned 3D Gaussians",
+            text="基于 3D 高斯泼溅的发丝重建工具",
             font=ctk.CTkFont(size=12),
             text_color="gray60"
         )
@@ -319,7 +319,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Cancel button (shown only while processing)
         self.cancel_btn = ctk.CTkButton(
             self.progress_frame,
-            text="Cancel",
+            text="取消",
             width=80,
             height=28,
             fg_color="#b71c1c",
@@ -489,7 +489,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Status
         self.status_label = ctk.CTkLabel(
             self.footer_frame,
-            text="Ready",
+            text="就绪",
             font=ctk.CTkFont(size=11),
             text_color="gray60"
         )
@@ -510,13 +510,13 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         n = len(images)
 
         if n == 0:
-            self.status_label.configure(text="No images loaded")
+            self.status_label.configure(text="未加载图片")
             self._apply_state(AppState.IDLE)
         elif n < MIN_IMAGES:
-            self.status_label.configure(text=f"{n} image{'s' if n > 1 else ''} loaded — need {MIN_IMAGES}")
+            self.status_label.configure(text=f"已加载 {n} 张 — 还需 {MIN_IMAGES - n} 张")
             self._apply_state(AppState.IDLE)
         else:
-            self.status_label.configure(text=f"{n} images ready")
+            self.status_label.configure(text=f"已加载 {n} 张图片，可开始处理")
             self._apply_state(AppState.INPUT_READY)
     
     def _check_and_download_models(self, on_ready):
@@ -558,7 +558,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             return
 
         self._apply_state(AppState.GENERATING)
-        self.status_label.configure(text="Generating Gaussians...")
+        self.status_label.configure(text="正在生成高斯点云…")
 
         def _start_processing():
             """Called after models are confirmed available."""
@@ -584,7 +584,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             return
 
         self._apply_state(AppState.EXTRACTING)
-        self.status_label.configure(text="Extracting curves...")
+        self.status_label.configure(text="正在提取发丝曲线…")
 
         def extract():
             try:
@@ -611,7 +611,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             return
 
         self._apply_state(AppState.GENERATING)
-        self.status_label.configure(text="Auto processing...")
+        self.status_label.configure(text="自动处理中…")
 
         def _start_auto():
             """Called after models are confirmed available."""
@@ -656,7 +656,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self._apply_state(AppState.DONE)
         self.edit_btn.configure(state="normal")
         self.status_label.configure(
-            text=f"Generated {cloud.num_splats} splats, {strands.num_strands} strands"
+            text=f"完成：{cloud.num_splats} 个高斯点，{strands.num_strands} 条发丝"
         )
     
     def _on_gaussians_generated(self, cloud: GaussianCloud, continue_processing: bool = False):
@@ -718,12 +718,12 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
     def _on_processing_error(self, error: str):
         """Handle processing error."""
         self._apply_state(AppState.ERROR)
-        self.status_label.configure(text=f"Error: {error}")
+        self.status_label.configure(text=f"错误：{error}")
         try:
             from CTkMessagebox import CTkMessagebox
             CTkMessagebox(master=self, title="处理失败", message=str(error), icon="cancel")
         except Exception:
-            pass  # CTkMessagebox not installed; status label already updated
+            pass
     
     def _on_project_loaded(self, cloud, strands):
         """Restore viewer and state after a .ghc project is loaded."""
@@ -744,15 +744,15 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self._apply_state(AppState.DONE)
         n_s = cloud.num_splats if cloud else 0
         n_c = strands.num_strands if strands else 0
-        self.status_label.configure(text=f"Project loaded — {n_s} splats, {n_c} strands")
+        self.status_label.configure(text=f"项目已加载 — {n_s} 个高斯点，{n_c} 条发丝")
 
     def _on_export_complete(self, success: bool, filepath: str):
         """Handle export complete."""
         if success:
             filename = Path(filepath).name
-            self.status_label.configure(text=f"Exported: {filename}")
+            self.status_label.configure(text=f"已导出：{filename}")
         else:
-            self.status_label.configure(text="Export failed")
+            self.status_label.configure(text="导出失败")
     
     def _show_progress(self):
         """Show progress bar."""
@@ -846,7 +846,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.gaussian_generator.cancel()
         if hasattr(self.strand_extractor, 'cancel'):
             self.strand_extractor.cancel()
-        self.status_label.configure(text="Cancelled")
+        self.status_label.configure(text="已取消")
     
     def _set_window_icon(self):
         """Set the window icon for both title bar and taskbar."""

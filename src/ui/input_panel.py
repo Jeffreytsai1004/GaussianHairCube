@@ -64,7 +64,7 @@ class InputPanel(ctk.CTkFrame):
 
     def _create_widgets(self):
         ctk.CTkLabel(
-            self, text="📁 Input Images",
+            self, text="📁 输入图片",
             font=ctk.CTkFont(size=18, weight="bold"),
         ).grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
 
@@ -74,7 +74,7 @@ class InputPanel(ctk.CTkFrame):
 
         self._placeholder = ctk.CTkLabel(
             self.thumb_scroll,
-            text="Drop images here\nor click Add Images",
+            text="拖放图片到此区域\n或点击「添加图片」",
             font=ctk.CTkFont(size=13),
             text_color="gray60",
         )
@@ -87,19 +87,19 @@ class InputPanel(ctk.CTkFrame):
         ctrl.grid_columnconfigure((0, 1), weight=1)
 
         ctk.CTkButton(
-            ctrl, text="📤 Add Images",
+            ctrl, text="📤 添加图片",
             command=self._browse_files, height=36,
         ).grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
 
         ctk.CTkButton(
-            ctrl, text="🗑️ Clear All",
+            ctrl, text="🗑️ 全部清除",
             command=self._clear_all,
             fg_color="gray40", hover_color="gray30", height=36,
         ).grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
 
         self.status_label = ctk.CTkLabel(
             self,
-            text=f"No images loaded (minimum {MIN_IMAGES} required)",
+            text=f"未加载图片（至少需要 {MIN_IMAGES} 张）",
             font=ctk.CTkFont(size=11),
             text_color="gray60",
         )
@@ -139,7 +139,7 @@ class InputPanel(ctk.CTkFrame):
 
     def _browse_files(self):
         filepaths = filedialog.askopenfilenames(
-            title="Select Images (hold Ctrl/Shift for multiple)",
+            title="选择图片（按住 Ctrl/Shift 多选）",
             filetypes=IMAGE_FORMATS,
         )
         for fp in filepaths:
@@ -161,7 +161,7 @@ class InputPanel(ctk.CTkFrame):
             self._fire_callback()
         except Exception as exc:
             self.status_label.configure(
-                text=f"Error loading {Path(filepath).name}: {exc}",
+                text=f"加载失败 {Path(filepath).name}: {exc}",
                 text_color="#f44336",
             )
 
@@ -213,7 +213,7 @@ class InputPanel(ctk.CTkFrame):
         if not self._images:
             self._placeholder = ctk.CTkLabel(
                 self.thumb_scroll,
-                text="Drop images here\nor click Add Images",
+                text="拖放图片到此区域\n或点击「添加图片」",
                 font=ctk.CTkFont(size=13),
                 text_color="gray60",
             )
@@ -232,17 +232,17 @@ class InputPanel(ctk.CTkFrame):
         n = len(self._images)
         if n == 0:
             self.status_label.configure(
-                text=f"No images loaded (minimum {MIN_IMAGES} required)",
+                text=f"未加载图片（至少需要 {MIN_IMAGES} 张）",
                 text_color="gray60",
             )
         elif n < MIN_IMAGES:
             self.status_label.configure(
-                text=f"{n} image{'s' if n > 1 else ''} loaded — add {MIN_IMAGES - n} more to process",
+                text=f"已加载 {n} 张 — 还需添加 {MIN_IMAGES - n} 张才能开始处理",
                 text_color="#ff9800",
             )
         else:
             self.status_label.configure(
-                text=f"{n} images loaded ✓",
+                text=f"已加载 {n} 张图片 ✓",
                 text_color="#4caf50",
             )
 

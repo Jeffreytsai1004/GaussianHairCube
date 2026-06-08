@@ -16,7 +16,6 @@ import time
 # Import rendering
 from pathlib import Path
 from src.rendering.viewer_3d import Viewer3D, ViewMode, ShadingMode
-from src.rendering.gaussian_renderer import GaussianRenderer
 from src.core.gaussian_generator import GaussianCloud
 from src.core.hair_strands import HairStrandCollection
 

@@ -61,69 +61,49 @@ class OutputPanel(ctk.CTkFrame):
     
     def _create_widgets(self):
         """Create panel widgets."""
-        # Title
         self.title_label = ctk.CTkLabel(
-            self,
-            text="📤 Export",
+            self, text="📤 导出",
             font=ctk.CTkFont(size=18, weight="bold")
         )
         self.title_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
-        
+
         # Status frame
         self.status_frame = ctk.CTkFrame(self, fg_color="gray20")
         self.status_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         self.status_frame.grid_columnconfigure(1, weight=1)
-        
-        # Gaussian status
-        self.gaussian_icon = ctk.CTkLabel(
-            self.status_frame,
-            text="⚪",
-            font=ctk.CTkFont(size=14)
-        )
+
+        self.gaussian_icon = ctk.CTkLabel(self.status_frame, text="⚪", font=ctk.CTkFont(size=14))
         self.gaussian_icon.grid(row=0, column=0, padx=5, pady=5)
-        
         self.gaussian_status = ctk.CTkLabel(
-            self.status_frame,
-            text="Gaussians: Not generated",
-            font=ctk.CTkFont(size=11),
-            text_color="gray60"
+            self.status_frame, text="高斯点云：未生成",
+            font=ctk.CTkFont(size=11), text_color="gray60",
         )
         self.gaussian_status.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        
-        # Curves status
-        self.curves_icon = ctk.CTkLabel(
-            self.status_frame,
-            text="⚪",
-            font=ctk.CTkFont(size=14)
-        )
+
+        self.curves_icon = ctk.CTkLabel(self.status_frame, text="⚪", font=ctk.CTkFont(size=14))
         self.curves_icon.grid(row=1, column=0, padx=5, pady=5)
-        
         self.curves_status = ctk.CTkLabel(
-            self.status_frame,
-            text="Curves: Not extracted",
-            font=ctk.CTkFont(size=11),
-            text_color="gray60"
+            self.status_frame, text="发丝曲线：未提取",
+            font=ctk.CTkFont(size=11), text_color="gray60",
         )
         self.curves_status.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-        
-        # Export format section
+
+        # Export format
         self.format_label = ctk.CTkLabel(
-            self,
-            text="Export Format:",
+            self, text="导出格式:",
             font=ctk.CTkFont(size=13, weight="bold")
         )
         self.format_label.grid(row=2, column=0, padx=10, pady=(15, 5), sticky="w")
-        
-        # Format selection
+
         self.format_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.format_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
         self.format_frame.grid_columnconfigure((0, 1), weight=1)
-        
+
         self.format_var = ctk.StringVar(value="fbx")
         self.format_var.trace_add("write", self._on_format_changed)
 
         self.fbx_radio = ctk.CTkRadioButton(
-            self.format_frame, text="Maya FBX Curves",
+            self.format_frame, text="Maya FBX 曲线",
             variable=self.format_var, value="fbx", font=ctk.CTkFont(size=12)
         )
         self.fbx_radio.grid(row=0, column=0, padx=5, pady=5, sticky="w")
@@ -133,28 +113,26 @@ class OutputPanel(ctk.CTkFrame):
             variable=self.format_var, value="glb", font=ctk.CTkFont(size=12)
         )
         self.glb_radio.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        
+
         # Export options
         self.options_label = ctk.CTkLabel(
-            self,
-            text="Options:",
+            self, text="选项:",
             font=ctk.CTkFont(size=13, weight="bold")
         )
         self.options_label.grid(row=4, column=0, padx=10, pady=(15, 5), sticky="w")
-        
+
         self.options_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.options_frame.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
         self.options_frame.grid_columnconfigure(1, weight=1)
-        
+
         # Scale preset
-        ctk.CTkLabel(self.options_frame, text="Scale Preset:", font=ctk.CTkFont(size=11)).grid(
+        ctk.CTkLabel(self.options_frame, text="缩放预设:", font=ctk.CTkFont(size=11)).grid(
             row=0, column=0, padx=5, pady=3, sticky="w")
-        # Presets: (label, scale_value)
         self._scale_presets = {
-            "Normalized (1×)": "1.0",
+            "归一化 (1×)": "1.0",
             "Maya / cm (25×)": "25.0",
             "Blender / m (0.25×)": "0.25",
-            "Custom": None,
+            "自定义": None,
         }
         self.scale_preset_menu = ctk.CTkOptionMenu(
             self.options_frame,
@@ -166,14 +144,14 @@ class OutputPanel(ctk.CTkFrame):
         self.scale_preset_menu.set("Normalized (1×)")
 
         # Manual scale entry (shown for Custom)
-        ctk.CTkLabel(self.options_frame, text="Scale:", font=ctk.CTkFont(size=11)).grid(
+        ctk.CTkLabel(self.options_frame, text="缩放系数:", font=ctk.CTkFont(size=11)).grid(
             row=1, column=0, padx=5, pady=3, sticky="w")
         self.scale_entry = ctk.CTkEntry(self.options_frame, width=80, placeholder_text="1.0")
         self.scale_entry.grid(row=1, column=1, padx=5, pady=3, sticky="w")
         self.scale_entry.insert(0, "1.0")
         
         # Up axis
-        ctk.CTkLabel(self.options_frame, text="Up Axis:", font=ctk.CTkFont(size=11)).grid(
+        ctk.CTkLabel(self.options_frame, text="向上轴:", font=ctk.CTkFont(size=11)).grid(
             row=2, column=0, padx=5, pady=3, sticky="w")
         self.axis_var = ctk.StringVar(value="Y")
         self.axis_menu = ctk.CTkOptionMenu(
@@ -184,7 +162,7 @@ class OutputPanel(ctk.CTkFrame):
         # Include color
         self.color_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
-            self.options_frame, text="Include Color",
+            self.options_frame, text="包含颜色",
             variable=self.color_var, font=ctk.CTkFont(size=11)
         ).grid(row=3, column=0, columnspan=2, padx=5, pady=3, sticky="w")
         
@@ -217,37 +195,32 @@ class OutputPanel(ctk.CTkFrame):
         
         # Quick export section
         self.quick_label = ctk.CTkLabel(
-            self,
-            text="Quick Export:",
+            self, text="快速导出:",
             font=ctk.CTkFont(size=13, weight="bold")
         )
         self.quick_label.grid(row=8, column=0, padx=10, pady=(15, 5), sticky="w")
-        
+
         self.quick_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.quick_frame.grid(row=9, column=0, padx=10, pady=5, sticky="ew")
         self.quick_frame.grid_columnconfigure((0, 1), weight=1)
-        
+
         self.quick_fbx_btn = ctk.CTkButton(
-            self.quick_frame,
-            text="📁 FBX",
+            self.quick_frame, text="📁 FBX",
             command=lambda: self._quick_export("fbx"),
-            height=32,
-            state="disabled"
+            height=32, state="disabled"
         )
         self.quick_fbx_btn.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
-        
+
         self.quick_glb_btn = ctk.CTkButton(
-            self.quick_frame,
-            text="📁 GLB",
+            self.quick_frame, text="📁 GLB",
             command=lambda: self._quick_export("glb"),
-            height=32,
-            state="disabled"
+            height=32, state="disabled"
         )
         self.quick_glb_btn.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="ew")
 
-        # Project save / load section
+        # Project save / load
         ctk.CTkLabel(
-            self, text="Project:", font=ctk.CTkFont(size=13, weight="bold")
+            self, text="项目:", font=ctk.CTkFont(size=13, weight="bold")
         ).grid(row=10, column=0, padx=10, pady=(15, 5), sticky="w")
 
         proj_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -255,7 +228,7 @@ class OutputPanel(ctk.CTkFrame):
         proj_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.save_proj_btn = ctk.CTkButton(
-            proj_frame, text="💾 Save .ghc",
+            proj_frame, text="💾 保存 .ghc",
             command=self._save_project,
             height=32, fg_color="#1565c0", hover_color="#0d47a1",
             state="disabled"
@@ -263,7 +236,7 @@ class OutputPanel(ctk.CTkFrame):
         self.save_proj_btn.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
 
         self.load_proj_btn = ctk.CTkButton(
-            proj_frame, text="📂 Load .ghc",
+            proj_frame, text="📂 载入 .ghc",
             command=self._load_project,
             height=32, fg_color="gray40", hover_color="gray30"
         )
@@ -272,27 +245,22 @@ class OutputPanel(ctk.CTkFrame):
     def set_gaussian_data(self, cloud: GaussianCloud):
         """Set Gaussian cloud data."""
         self.gaussian_cloud = cloud
-        
-        # Update status
         self.gaussian_icon.configure(text="🟢")
         self.gaussian_status.configure(
-            text=f"Gaussians: {cloud.num_splats} splats",
+            text=f"高斯点云：{cloud.num_splats} 个点",
             text_color="white"
         )
-        
         self._update_export_state()
         self._update_save_state()
 
     def set_strand_data(self, strands: HairStrandCollection):
         """Set hair strand data."""
         self.hair_strands = strands
-
         self.curves_icon.configure(text="🟢")
         self.curves_status.configure(
-            text=f"Curves: {strands.num_strands} strands ({strands.total_points} points)",
+            text=f"发丝曲线：{strands.num_strands} 条，{strands.total_points} 个点",
             text_color="white"
         )
-
         self._update_export_state()
         self._update_save_state()
     
@@ -402,7 +370,7 @@ class OutputPanel(ctk.CTkFrame):
         # Show progress
         self.progress_frame.grid()
         self.progress_bar.set(0)
-        self.progress_label.configure(text="Starting export...")
+        self.progress_label.configure(text="开始导出…")
         
         # Disable buttons
         self.export_btn.configure(state="disabled")
@@ -452,9 +420,9 @@ class OutputPanel(ctk.CTkFrame):
         self.is_exporting = False
         
         if success:
-            self.progress_label.configure(text=f"✓ Exported to {Path(filepath).name}")
+            self.progress_label.configure(text=f"✓ 已导出到 {Path(filepath).name}")
         else:
-            self.progress_label.configure(text="✗ Export failed")
+            self.progress_label.configure(text="✗ 导出失败")
         
         # Re-enable buttons
         self._update_export_state()
@@ -470,7 +438,7 @@ class OutputPanel(ctk.CTkFrame):
         """Called when export fails."""
         self.is_exporting = False
         
-        self.progress_label.configure(text=f"✗ Error: {error}")
+        self.progress_label.configure(text=f"✗ 错误：{error}")
         self._update_export_state()
         
         self.after(5000, self._hide_progress)
@@ -486,9 +454,9 @@ class OutputPanel(ctk.CTkFrame):
         self.hair_strands = None
 
         self.gaussian_icon.configure(text="⚪")
-        self.gaussian_status.configure(text="Gaussians: Not generated", text_color="gray60")
+        self.gaussian_status.configure(text="高斯点云：未生成", text_color="gray60")
         self.curves_icon.configure(text="⚪")
-        self.curves_status.configure(text="Curves: Not extracted", text_color="gray60")
+        self.curves_status.configure(text="发丝曲线：未提取", text_color="gray60")
 
         self._update_export_state()
         self._update_save_state()
@@ -511,7 +479,7 @@ class OutputPanel(ctk.CTkFrame):
             return
         from src.core.project_io import save_project
         ok = save_project(filepath, self.gaussian_cloud, self.hair_strands)
-        msg = f"✓ Project saved: {Path(filepath).name}" if ok else "✗ Save failed"
+        msg = f"✓ 项目已保存：{Path(filepath).name}" if ok else "✗ 保存失败"
         self.progress_label.configure(text=msg)
         self.progress_frame.grid()
         self.after(3000, self._hide_progress)
@@ -527,7 +495,7 @@ class OutputPanel(ctk.CTkFrame):
         from src.core.project_io import load_project
         cloud, strands, meta = load_project(filepath)
         if cloud is None and strands is None:
-            self.progress_label.configure(text="✗ Failed to load project")
+            self.progress_label.configure(text="✗ 项目加载失败")
             self.progress_frame.grid()
             self.after(4000, self._hide_progress)
             return
@@ -538,7 +506,7 @@ class OutputPanel(ctk.CTkFrame):
             self.set_strand_data(strands)
 
         n_s, n_c = meta.get("num_splats", 0), meta.get("num_strands", 0)
-        self.progress_label.configure(text=f"✓ Loaded: {n_s} splats, {n_c} strands")
+        self.progress_label.configure(text=f"✓ 已加载：{n_s} 个高斯点，{n_c} 条发丝")
         self.progress_frame.grid()
         self.after(3000, self._hide_progress)
 
