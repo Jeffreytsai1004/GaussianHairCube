@@ -141,6 +141,8 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.bind_all("<Control-b>",     lambda e: self._show_batch_dialog())
         self.bind_all("<Control-B>",     lambda e: self._show_batch_dialog())
         self.bind_all("<Control-comma>", lambda e: self._show_settings())
+        self.bind_all("<Control-l>",     lambda e: self._show_log_window())
+        self.bind_all("<Control-L>",     lambda e: self._show_log_window())
         self.bind_all("<F1>",            lambda e: self._show_about())
         self.bind_all("<Escape>",        lambda e: self._shortcut_escape())
 
@@ -164,6 +166,16 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
     def _show_about(self):
         """Show the About dialog."""
         AboutDialog(self)
+
+    def _show_log_window(self):
+        """Open the live log window (or focus the existing one)."""
+        existing = getattr(self, "_log_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        from src.ui.log_window import LogWindow
+        self._log_window = LogWindow(self)
 
     def _maybe_show_model_banner(self):
         """If AI models are not cached on first launch, show a non-modal banner
@@ -283,6 +295,18 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         )
         self.batch_btn.grid(row=0, column=2, padx=(0, 4), pady=10)
 
+        # Log window button
+        self.log_btn = ctk.CTkButton(
+            self.header_frame,
+            text="📋 日志",
+            width=72, height=36,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray30",
+            hover_color="gray20",
+            command=self._show_log_window,
+        )
+        self.log_btn.grid(row=0, column=3, padx=(0, 4), pady=10)
+
         # About button
         self.about_btn = ctk.CTkButton(
             self.header_frame,
@@ -293,7 +317,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             hover_color="gray30",
             command=self._show_about,
         )
-        self.about_btn.grid(row=0, column=3, padx=(0, 2), pady=10)
+        self.about_btn.grid(row=0, column=4, padx=(0, 2), pady=10)
 
         # Settings button
         self.settings_btn = ctk.CTkButton(
@@ -306,7 +330,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             hover_color="gray30",
             command=self._show_settings
         )
-        self.settings_btn.grid(row=0, column=4, padx=10, pady=10)
+        self.settings_btn.grid(row=0, column=5, padx=10, pady=10)
     
     def _create_processing_controls(self):
         """Create processing control buttons."""
@@ -317,7 +341,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Generate Gaussians button
         self.generate_btn = ctk.CTkButton(
             self.controls_frame,
-            text="🔮 Generate Gaussians",
+            text="🔮 生成高斯",
             command=self._generate_gaussians,
             height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -328,7 +352,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Extract Curves button
         self.extract_btn = ctk.CTkButton(
             self.controls_frame,
-            text="〰️ Extract Curves",
+            text="〰️ 提取发丝",
             command=self._extract_curves,
             height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -339,7 +363,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Auto Process button
         self.auto_btn = ctk.CTkButton(
             self.controls_frame,
-            text="⚡ Auto Process",
+            text="⚡ 一键处理",
             command=self._auto_process,
             height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -352,7 +376,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         # Edit Gaussians button
         self.edit_btn = ctk.CTkButton(
             self.controls_frame,
-            text="🖌️ Edit",
+            text="🖌️ 编辑",
             command=self._toggle_edit_mode,
             height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -364,37 +388,55 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
 
         # Geometry edit panel (hidden by default)
         self._create_geometry_edit_panel()
-        
-        # Progress frame
-        self.progress_frame = ctk.CTkFrame(self.controls_frame, fg_color="transparent")
-        self.progress_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+        # Progress frame (taller, more prominent during processing)
+        self.progress_frame = ctk.CTkFrame(
+            self.controls_frame, fg_color="gray18", corner_radius=8,
+        )
+        self.progress_frame.grid(row=1, column=0, columnspan=4, padx=5, pady=(8, 5), sticky="ew")
         self.progress_frame.grid_columnconfigure(0, weight=1)
         self.progress_frame.grid_remove()  # Hidden initially
 
-        self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
-        self.progress_bar.grid(row=0, column=0, sticky="ew", pady=(5, 0))
+        # Top row: progress bar (left) + percent + cancel button (right)
+        bar_row = ctk.CTkFrame(self.progress_frame, fg_color="transparent")
+        bar_row.grid(row=0, column=0, padx=10, pady=(8, 2), sticky="ew")
+        bar_row.grid_columnconfigure(0, weight=1)
+
+        self.progress_bar = ctk.CTkProgressBar(bar_row, height=18)
+        self.progress_bar.grid(row=0, column=0, sticky="ew")
         self.progress_bar.set(0)
 
-        self.progress_label = ctk.CTkLabel(
-            self.progress_frame,
-            text="",
-            font=ctk.CTkFont(size=11)
+        self.progress_pct_label = ctk.CTkLabel(
+            bar_row, text="0%", width=42, font=ctk.CTkFont(size=11, weight="bold"),
         )
-        self.progress_label.grid(row=1, column=0, pady=(2, 0))
+        self.progress_pct_label.grid(row=0, column=1, padx=(8, 4))
 
-        # Cancel button (shown only while processing)
         self.cancel_btn = ctk.CTkButton(
-            self.progress_frame,
-            text="取消",
-            width=80,
-            height=28,
-            fg_color="#b71c1c",
-            hover_color="#7f0000",
-            font=ctk.CTkFont(size=11),
-            command=self._cancel_processing
+            bar_row, text="取消", width=72, height=24,
+            fg_color="#b71c1c", hover_color="#7f0000",
+            font=ctk.CTkFont(size=11), command=self._cancel_processing,
         )
-        self.cancel_btn.grid(row=0, column=1, padx=(8, 0), pady=(5, 0))
-        self.cancel_btn.grid_remove()  # Hidden initially
+        self.cancel_btn.grid(row=0, column=2, padx=(4, 0))
+        self.cancel_btn.grid_remove()
+
+        # Bottom row: detail message + view-log link
+        info_row = ctk.CTkFrame(self.progress_frame, fg_color="transparent")
+        info_row.grid(row=1, column=0, padx=10, pady=(0, 8), sticky="ew")
+        info_row.grid_columnconfigure(0, weight=1)
+
+        self.progress_label = ctk.CTkLabel(
+            info_row, text="", font=ctk.CTkFont(size=11),
+            text_color="gray70", anchor="w",
+        )
+        self.progress_label.grid(row=0, column=0, sticky="ew")
+
+        ctk.CTkButton(
+            info_row, text="📋 查看日志", width=88, height=22,
+            fg_color="transparent", hover_color="gray30",
+            font=ctk.CTkFont(size=10, underline=True),
+            text_color="#64b5f6",
+            command=self._show_log_window,
+        ).grid(row=0, column=1, padx=(8, 0))
 
     def _create_geometry_edit_panel(self):
         """Create the geometry brush editing panel (hidden by default)."""
@@ -488,7 +530,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             self.viewer.set_gaussian_data(updated)
         self.viewer.clear_brush_callback()
         self.geo_frame.grid_remove()
-        self.edit_btn.configure(text="🖌️ Edit", fg_color="gray40", hover_color="gray30")
+        self.edit_btn.configure(text="🖌️ 编辑", fg_color="gray40", hover_color="gray30")
         self.status_label.configure(text=f"高斯点云已更新：{self.current_cloud.num_splats} 个点")
 
     def _on_brush_click(self, sx: int, sy: int):
@@ -831,9 +873,13 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.progress_frame.grid_remove()
     
     def _update_progress(self, progress: float, message: str):
-        """Update progress bar."""
+        """Update progress bar value, percentage label, and detail message."""
+        progress = max(0.0, min(1.0, float(progress)))
         self.progress_bar.set(progress)
+        self.progress_pct_label.configure(text=f"{int(progress * 100)}%")
         self.progress_label.configure(text=message)
+        # Mirror to the log file (debug-level) so the log window shows it too
+        logger.debug("progress %.0f%% — %s", progress * 100, message)
     
     def _set_buttons_state(self, state: str):
         """Set state of processing buttons."""
@@ -1310,7 +1356,7 @@ class AboutDialog(ctk.CTkToplevel):
         # Keyboard shortcuts hint
         kb = ctk.CTkLabel(
             self,
-            text="快捷键：Ctrl+S 保存 · Ctrl+O 打开 · Ctrl+E 导出 · Ctrl+B 批量 · Ctrl+, 设置 · F1 关于 · Esc 取消",
+            text="快捷键：Ctrl+S 保存 · Ctrl+O 打开 · Ctrl+E 导出 · Ctrl+B 批量 · Ctrl+L 日志 · Ctrl+, 设置 · F1 关于 · Esc 取消",
             font=ctk.CTkFont(size=10), text_color="gray55",
             wraplength=480,
         )

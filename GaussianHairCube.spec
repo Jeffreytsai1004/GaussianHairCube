@@ -33,6 +33,7 @@ hiddenimports = [
     'pygltflib',
     # App modules (all must be explicit for PyInstaller)
     'src.config.settings_manager',
+    'src.config.logging_setup',
     'src.core.model_manager',
     'src.core.multiview_reconstruction',
     'src.core.geometry_controller',
@@ -40,6 +41,7 @@ hiddenimports = [
     'src.core.batch_processor',
     'src.ui.model_download_dialog',
     'src.ui.batch_dialog',
+    'src.ui.log_window',
     # HuggingFace (optional — only bundled if installed)
     'huggingface_hub', 'huggingface_hub.utils', 'safetensors',
 ]

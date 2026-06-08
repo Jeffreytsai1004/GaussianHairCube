@@ -83,6 +83,60 @@ class TestLoggingSetup(unittest.TestCase):
                 self.assertIn("boom!", content)
             _reset_logging()
 
+    def test_buffer_captures_messages(self):
+        """The in-memory ring buffer should record every log line."""
+        with _make_tmp_appdata() as tmpdir:
+            with patch.dict(os.environ, {"APPDATA": tmpdir}):
+                logging_setup._log_buffer.clear()  # start clean
+                logging_setup.setup_logging(console=False)
+                logger = logging.getLogger("buf_test")
+                logger.info("first")
+                logger.warning("second")
+                logger.error("third")
+                buf = logging_setup.get_log_buffer()
+                msgs = " ".join(m for m, _ in buf)
+                self.assertIn("first", msgs)
+                self.assertIn("second", msgs)
+                self.assertIn("third", msgs)
+                # Level names preserved
+                levels = [lvl for _, lvl in buf]
+                self.assertIn("INFO", levels)
+                self.assertIn("WARNING", levels)
+                self.assertIn("ERROR", levels)
+            _reset_logging()
+
+    def test_listener_receives_messages(self):
+        """Registered listeners should be called for every emitted record."""
+        with _make_tmp_appdata() as tmpdir:
+            with patch.dict(os.environ, {"APPDATA": tmpdir}):
+                logging_setup.setup_logging(console=False)
+                received = []
+
+                def listener(msg, level):
+                    received.append((msg, level))
+
+                logging_setup.add_log_listener(listener)
+                logging.getLogger("listen_test").info("hello listener")
+                logging.getLogger("listen_test").error("boom listener")
+                logging_setup.remove_log_listener(listener)
+
+                # Sanity: messages must include both
+                joined = " ".join(m for m, _ in received)
+                self.assertIn("hello listener", joined)
+                self.assertIn("boom listener", joined)
+
+                # After removal, further records must not reach the listener
+                before = len(received)
+                logging.getLogger("listen_test").info("post-removal")
+                self.assertEqual(len(received), before)
+            _reset_logging()
+
+    def test_buffer_is_bounded(self):
+        """The ring buffer must respect its maxlen."""
+        from collections import deque
+        self.assertIsInstance(logging_setup._log_buffer, deque)
+        self.assertEqual(logging_setup._log_buffer.maxlen, logging_setup._BUFFER_SIZE)
+
 
 if __name__ == "__main__":
     unittest.main()
