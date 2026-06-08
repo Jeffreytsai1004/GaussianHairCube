@@ -11,8 +11,20 @@ import threading
 import numpy as np
 from pathlib import Path
 import os
+import re
 import sys
+import logging
 from enum import Enum, auto
+
+logger = logging.getLogger(__name__)
+
+
+_GEOM_RE = re.compile(r"^\d+x\d+([+-]\d+[+-]\d+)?$")
+
+
+def _is_valid_geometry(s: str) -> bool:
+    """Reject malformed strings before passing to Tk's geometry() to avoid TclError."""
+    return bool(_GEOM_RE.match(s))
 
 
 class AppState(Enum):
@@ -66,21 +78,27 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
     def __init__(self):
         """Initialize the main window."""
         super().__init__()
-        
+
         # Window configuration
         self.title("GaussianHairCube - Hair Reconstruction")
-        self.geometry("1400x900")
         self.minsize(1000, 600)
-        
+
         # Set window icon
         self._set_window_icon()
-        
+
         # Set theme
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
-        
+
         # Load persisted settings
         self.settings = settings_manager.load_settings()
+
+        # Restore saved window geometry, or use default
+        saved_geom = self.settings.get('window_geometry', '').strip()
+        if saved_geom and _is_valid_geometry(saved_geom):
+            self.geometry(saved_geom)
+        else:
+            self.geometry("1400x900")
 
         # Initialize processors
         self.gaussian_generator = GaussianGenerator()
@@ -107,9 +125,45 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.grid_rowconfigure(3, weight=0)  # Model-status banner (first-launch)
         
         self._create_widgets()
+        self._bind_shortcuts()
 
         # First-launch model status banner (does not block — shows after main loop starts)
         self.after(800, self._maybe_show_model_banner)
+
+    def _bind_shortcuts(self):
+        """Bind keyboard shortcuts at the window level."""
+        self.bind_all("<Control-s>",     lambda e: self._shortcut_save_project())
+        self.bind_all("<Control-S>",     lambda e: self._shortcut_save_project())
+        self.bind_all("<Control-o>",     lambda e: self._shortcut_load_project())
+        self.bind_all("<Control-O>",     lambda e: self._shortcut_load_project())
+        self.bind_all("<Control-e>",     lambda e: self._shortcut_export())
+        self.bind_all("<Control-E>",     lambda e: self._shortcut_export())
+        self.bind_all("<Control-b>",     lambda e: self._show_batch_dialog())
+        self.bind_all("<Control-B>",     lambda e: self._show_batch_dialog())
+        self.bind_all("<Control-comma>", lambda e: self._show_settings())
+        self.bind_all("<F1>",            lambda e: self._show_about())
+        self.bind_all("<Escape>",        lambda e: self._shortcut_escape())
+
+    def _shortcut_save_project(self):
+        if self.current_cloud is not None or self.current_strands is not None:
+            self.output_panel._save_project()
+
+    def _shortcut_load_project(self):
+        self.output_panel._load_project()
+
+    def _shortcut_export(self):
+        """Trigger export if strands are available."""
+        if self.current_strands is not None and self.current_strands.num_strands > 0:
+            self.output_panel._export()
+
+    def _shortcut_escape(self):
+        """Cancel current processing if running; otherwise no-op."""
+        if self.app_state in (AppState.GENERATING, AppState.EXTRACTING):
+            self._cancel_processing()
+
+    def _show_about(self):
+        """Show the About dialog."""
+        AboutDialog(self)
 
     def _maybe_show_model_banner(self):
         """If AI models are not cached on first launch, show a non-modal banner
@@ -229,6 +283,18 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         )
         self.batch_btn.grid(row=0, column=2, padx=(0, 4), pady=10)
 
+        # About button
+        self.about_btn = ctk.CTkButton(
+            self.header_frame,
+            text="ℹ️",
+            width=36, height=36,
+            font=ctk.CTkFont(size=16),
+            fg_color="transparent",
+            hover_color="gray30",
+            command=self._show_about,
+        )
+        self.about_btn.grid(row=0, column=3, padx=(0, 2), pady=10)
+
         # Settings button
         self.settings_btn = ctk.CTkButton(
             self.header_frame,
@@ -240,7 +306,7 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
             hover_color="gray30",
             command=self._show_settings
         )
-        self.settings_btn.grid(row=0, column=3, padx=10, pady=10)
+        self.settings_btn.grid(row=0, column=4, padx=10, pady=10)
     
     def _create_processing_controls(self):
         """Create processing control buttons."""
@@ -835,7 +901,16 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
                 self.viewer.hide_loading()
 
     def _on_closing(self):
-        """Handle window close — cancel any active work first."""
+        """Handle window close — persist geometry, cancel any active work, then exit."""
+        # Persist window geometry for next launch
+        try:
+            geom = self.geometry()  # e.g. "1400x900+120+50"
+            if _is_valid_geometry(geom):
+                self.settings['window_geometry'] = geom
+                settings_manager.save_settings(self.settings)
+        except Exception:
+            logger.exception("Failed to save window geometry on close")
+
         self.gaussian_generator.cancel()
         if hasattr(self.strand_extractor, 'cancel'):
             self.strand_extractor.cancel()
@@ -1179,3 +1254,66 @@ class SettingsDialog(ctk.CTkToplevel):
 
         settings_manager.save_settings(parent.settings)
         self.destroy()
+
+
+class AboutDialog(ctk.CTkToplevel):
+    """A simple About dialog showing version, credits, license, and log file location."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("关于 GaussianHairCube")
+        self.geometry("520x460")
+        self.resizable(False, False)
+        self.grab_set()
+
+        ctk.CTkLabel(
+            self, text="💇 GaussianHairCube",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(padx=20, pady=(20, 4))
+
+        ctk.CTkLabel(
+            self, text="基于 3D 高斯泼溅的发丝重建工具  ·  v1.0 (开发中)",
+            font=ctk.CTkFont(size=12), text_color="gray60",
+        ).pack(padx=20, pady=(0, 16))
+
+        info = (
+            "本工具参考 ETH Zurich AIT Lab 的 GaussianHaircut 研究实现。\n"
+            "输入多张照片，自动重建 3D 发丝并导出 FBX / GLB。\n\n"
+            "AI 模型：\n"
+            "  • jonathandinu/face-parsing  (发丝分割)\n"
+            "  • depth-anything/Depth-Anything-V2-Small  (深度估计)\n\n"
+            "致谢：\n"
+            "  • GaussianHaircut — ETH Zurich AIT Lab\n"
+            "  • 3D Gaussian Splatting — INRIA\n"
+            "  • CustomTkinter — Tom Schimansky\n\n"
+            "许可证：MIT License"
+        )
+        body = ctk.CTkTextbox(self, height=240, wrap="word", fg_color="gray18")
+        body.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        body.insert("1.0", info)
+        body.configure(state="disabled")
+
+        # Log file row
+        try:
+            from src.config.logging_setup import get_log_file
+            log_path = str(get_log_file())
+        except Exception:
+            log_path = ""
+
+        log_row = ctk.CTkFrame(self, fg_color="transparent")
+        log_row.pack(fill="x", padx=20, pady=(0, 6))
+        ctk.CTkLabel(log_row, text="日志:", font=ctk.CTkFont(size=10),
+                     text_color="gray60").pack(side="left")
+        ctk.CTkLabel(log_row, text=log_path, font=ctk.CTkFont(size=10),
+                     text_color="gray70", anchor="w").pack(side="left", padx=(4, 0), fill="x", expand=True)
+
+        # Keyboard shortcuts hint
+        kb = ctk.CTkLabel(
+            self,
+            text="快捷键：Ctrl+S 保存 · Ctrl+O 打开 · Ctrl+E 导出 · Ctrl+B 批量 · Ctrl+, 设置 · F1 关于 · Esc 取消",
+            font=ctk.CTkFont(size=10), text_color="gray55",
+            wraplength=480,
+        )
+        kb.pack(padx=20, pady=(0, 10))
+
+        ctk.CTkButton(self, text="关闭", command=self.destroy, width=100, height=32).pack(pady=(0, 16))

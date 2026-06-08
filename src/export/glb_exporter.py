@@ -10,6 +10,7 @@ suitable for import into Blender and other 3D applications.
 import json
 import struct
 import base64
+import logging
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from pathlib import Path
 # Import types
 from src.core.hair_strands import HairStrand, HairStrandCollection
 from src.core.gaussian_generator import GaussianCloud
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,11 +94,9 @@ class GLBExporter:
             return True
             
         except Exception as e:
-            print(f"GLB export error: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("GLB strands export failed: %s", e)
             return False
-    
+
     def export_gaussians(
         self,
         cloud: GaussianCloud,
@@ -130,7 +131,7 @@ class GLBExporter:
             return True
             
         except Exception as e:
-            print(f"GLB export error: {e}")
+            logger.exception("GLB gaussians export failed: %s", e)
             return False
     
     def _transform_coordinates(self, points: np.ndarray) -> np.ndarray:

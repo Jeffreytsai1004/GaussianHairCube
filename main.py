@@ -16,25 +16,30 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from src.config.logging_setup import setup_logging
 from src.ui.main_window import MainWindow
 
 
 def main():
     """Application entry point."""
+    # Configure logging first so every subsequent import can log
+    log_path = setup_logging()
+
     # Apply HuggingFace mirror from settings before any network call
     try:
         from src.core.model_manager import apply_hf_mirror
         apply_hf_mirror()
     except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).exception("apply_hf_mirror failed at startup")
 
     try:
         app = MainWindow()
         app.mainloop()
     except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
+        import logging
+        logging.getLogger(__name__).exception("Fatal error in main loop")
+        print(f"Error: {e}\nLog file: {log_path}")
         return 1
 
     return 0

@@ -8,6 +8,7 @@ and used with hair simulation systems like XGen or nHair.
 """
 
 import struct
+import logging
 import numpy as np
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ import time
 
 # Import hair strands types
 from src.core.hair_strands import HairStrand, HairStrandCollection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,7 +95,7 @@ class FBXExporter:
             return True
             
         except Exception as e:
-            print(f"FBX export error: {e}")
+            logger.exception("FBX export failed: %s", e)
             return False
     
     def _generate_fbx_ascii(

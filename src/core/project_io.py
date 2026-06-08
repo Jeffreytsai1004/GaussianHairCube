@@ -12,6 +12,7 @@ Format: ZIP archive containing
 
 import io
 import json
+import logging
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,8 @@ import numpy as np
 
 from src.core.gaussian_generator import GaussianCloud, GaussianSplat
 from src.core.hair_strands import HairStrand, HairStrandCollection
+
+logger = logging.getLogger(__name__)
 
 _FORMAT_VERSION = "1.0"
 _GHC_SUFFIX = ".ghc"
@@ -68,7 +71,7 @@ def save_project(
 
         return True
     except Exception as exc:
-        print(f"[project_io] save_project failed: {exc}")
+        logger.exception("save_project failed: %s", exc)
         return False
 
 
@@ -143,7 +146,7 @@ def load_project(path: str):
 
         return cloud, strand_col, meta
     except Exception as exc:
-        print(f"[project_io] load_project failed: {exc}")
+        logger.exception("load_project failed: %s", exc)
         return None, None, {}
 
 

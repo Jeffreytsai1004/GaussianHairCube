@@ -24,6 +24,8 @@ DEFAULT_SETTINGS = {
     # HuggingFace endpoint — leave empty to use the default (huggingface.co).
     # Chinese users can set this to "https://hf-mirror.com" for faster downloads.
     'hf_endpoint': '',
+    # Last window geometry string, e.g. "1400x900+120+50". Empty = default.
+    'window_geometry': '',
 }
 
 

@@ -12,12 +12,14 @@ import numpy as np
 from typing import Optional, Callable
 import threading
 import time
+import logging
 
-# Import rendering
 from pathlib import Path
 from src.rendering.viewer_3d import Viewer3D, ViewMode, ShadingMode
 from src.core.gaussian_generator import GaussianCloud
 from src.core.hair_strands import HairStrandCollection
+
+logger = logging.getLogger(__name__)
 
 
 class ViewerWidget(ctk.CTkFrame):
@@ -309,7 +311,7 @@ class ViewerWidget(ctk.CTkFrame):
             self._update_canvas(image)
             self._update_stats()
         except Exception as e:
-            print(f"Render error: {e}")
+            logger.exception("Sync render error: %s", e)
 
     def _render_async(self):
         """Kick off a background render if one isn't already pending."""
@@ -325,7 +327,7 @@ class ViewerWidget(ctk.CTkFrame):
             image = self.viewer.render_to_image()
             self.after(0, lambda img=image: self._render_complete(img))
         except Exception as e:
-            print(f"Async render error: {e}")
+            logger.exception("Async render error: %s", e)
             self._render_pending = False
 
     def _render_complete(self, image):
