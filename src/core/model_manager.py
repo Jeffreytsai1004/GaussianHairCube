@@ -19,6 +19,63 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+def diagnose_env() -> dict:
+    """
+    Inspect the running Python and key dependencies.  Used by the UI to
+    show a self-diagnostic when the user reports 'I already pip-installed
+    transformers but the app still says it's missing'.
+
+    Returns dict with:
+        python: {executable, version, prefix}
+        packages: list of {name, installed: bool, version, origin, error}
+        pip_hint: the exact command to install missing packages into
+                  *this* interpreter
+    """
+    import importlib.util
+    import sys
+
+    py_info = {
+        "executable": sys.executable,
+        "version":    sys.version.split()[0],
+        "prefix":     sys.prefix,
+    }
+
+    required = [
+        "transformers", "torch", "accelerate",
+        "huggingface_hub", "safetensors",
+    ]
+    packages = []
+    missing = []
+    for name in required:
+        spec = importlib.util.find_spec(name)
+        if spec is None:
+            packages.append({"name": name, "installed": False})
+            missing.append(name)
+            continue
+        try:
+            mod = __import__(name)
+            packages.append({
+                "name":      name,
+                "installed": True,
+                "version":   getattr(mod, "__version__", "?"),
+                "origin":    spec.origin or "(namespace package)",
+            })
+        except Exception as exc:
+            packages.append({
+                "name": name, "installed": True,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            missing.append(name)
+
+    # Build a copy-pasteable install command using *this* interpreter so
+    # we sidestep multi-Python-install confusion.
+    pip_hint = ""
+    if missing:
+        pip_hint = f'"{sys.executable}" -m pip install ' + " ".join(missing)
+
+    return {"python": py_info, "packages": packages, "pip_hint": pip_hint}
+
+
 def apply_hf_mirror():
     """
     Apply the HuggingFace endpoint from settings (or HF_ENDPOINT env var).
@@ -179,9 +236,20 @@ def download_models(
             SegformerImageProcessor, SegformerForSemanticSegmentation,
             AutoImageProcessor, AutoModelForDepthEstimation,
         )
-    except ImportError:
+    except ImportError as exc:
+        # Most common "I already pip-installed it!" case: user installed
+        # the package into a different Python interpreter.
+        import sys
+        msg = (
+            f"transformers 导入失败：{exc}\n\n"
+            f"当前 Python：{sys.executable}\n"
+            f"请用此 Python 重新安装：\n"
+            f'  "{sys.executable}" -m pip install transformers accelerate huggingface_hub safetensors\n\n'
+            f"（点击下方「🔧 环境诊断」查看完整依赖状态）"
+        )
+        logger.error("transformers import failed (sys.executable=%s): %s", sys.executable, exc)
         if progress_callback:
-            progress_callback(0.0, "错误: transformers 库未安装，请运行 pip install transformers")
+            progress_callback(0.0, msg)
         return False
 
     models_to_load = [

@@ -42,6 +42,7 @@ hiddenimports = [
     'src.ui.model_download_dialog',
     'src.ui.batch_dialog',
     'src.ui.log_window',
+    'src.ui.env_diagnostic_dialog',
     # HuggingFace (optional — only bundled if installed)
     'huggingface_hub', 'huggingface_hub.utils', 'safetensors',
 ]

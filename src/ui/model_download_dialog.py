@@ -202,10 +202,23 @@ class ModelDownloadDialog(ctk.CTkToplevel):
             except Exception:
                 pass
 
+        def open_env_diagnostic():
+            try:
+                from src.ui.env_diagnostic_dialog import EnvDiagnosticDialog
+                EnvDiagnosticDialog(self)
+            except Exception:
+                pass
+
         ctk.CTkButton(
             extras, text="📋 查看日志", width=110, height=28,
             fg_color="gray35", hover_color="gray25",
             command=open_log,
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            extras, text="🔧 环境诊断", width=110, height=28,
+            fg_color="#1565c0", hover_color="#0d47a1",
+            command=open_env_diagnostic,
         ).pack(side="left", padx=4)
 
         ctk.CTkButton(
