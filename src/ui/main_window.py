@@ -104,9 +104,56 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
         self.grid_rowconfigure(0, weight=0)  # Header
         self.grid_rowconfigure(1, weight=1)  # Main content
         self.grid_rowconfigure(2, weight=0)  # Footer
+        self.grid_rowconfigure(3, weight=0)  # Model-status banner (first-launch)
         
         self._create_widgets()
-    
+
+        # First-launch model status banner (does not block — shows after main loop starts)
+        self.after(800, self._maybe_show_model_banner)
+
+    def _maybe_show_model_banner(self):
+        """If AI models are not cached on first launch, show a non-modal banner
+        with a one-click download CTA."""
+        try:
+            from src.core.model_manager import get_models_to_download
+            missing = get_models_to_download()
+        except Exception:
+            return
+        if not missing:
+            return
+
+        total_mb = sum(m.get("approx_size_mb", 0) for m in missing)
+        banner = ctk.CTkFrame(self, fg_color="#5c3a00", corner_radius=0, height=44)
+        banner.grid(row=3, column=0, columnspan=3, sticky="ew")
+        banner.grid_columnconfigure(0, weight=1)
+        banner.grid_propagate(False)
+
+        msg = (
+            f"⚠️  AI 模型未下载（共 ~{total_mb} MB）— 处理前需要先下载，"
+            "或在 Settings → AI 模型 中配置镜像源"
+        )
+        ctk.CTkLabel(
+            banner, text=msg, font=ctk.CTkFont(size=12),
+            text_color="white", anchor="w",
+        ).grid(row=0, column=0, padx=14, pady=8, sticky="w")
+
+        def _open_and_close():
+            banner.destroy()
+            self._show_settings()
+
+        ctk.CTkButton(
+            banner, text="⬇ 立即下载", command=_open_and_close,
+            height=28, width=110,
+            fg_color="#ff9800", hover_color="#f57c00",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=0, column=1, padx=(8, 4), pady=8)
+
+        ctk.CTkButton(
+            banner, text="✕", command=banner.destroy,
+            height=28, width=34,
+            fg_color="transparent", hover_color="#7c4d00",
+        ).grid(row=0, column=2, padx=(0, 8), pady=8)
+
     def _create_widgets(self):
         """Create main window widgets."""
         # Header
@@ -867,251 +914,247 @@ class MainWindow(CTkDnD if HAS_DND else ctk.CTk):
 
 
 class SettingsDialog(ctk.CTkToplevel):
-    """Settings dialog window."""
+    """Tabbed settings dialog with per-tab Reset and a one-click model download."""
+
+    _HELP = {
+        'iterations':    "GPU 高斯优化的迭代次数；越大质量越好但越慢（默认 1000）",
+        'points':        "每条发丝重采样为多少个控制点（默认 32）",
+        'num_strands':   "提取的最大发丝数量上限（默认 2000）",
+        'min_length':    "短于此长度的发丝会被丢弃；单位与点云空间相同（默认 0.05）",
+        'method':        "clustering：图遍历，速度快；flow_field：RK4 流场积分，覆盖率高",
+        'theme':         "Dark / Light / 跟随系统",
+        'mirror':        "国内访问慢时可填 https://hf-mirror.com，留空使用官方源",
+    }
 
     def __init__(self, parent):
         super().__init__(parent)
         self.parent_window = parent
 
         self.title("Settings")
-        self.geometry("400x660")
-        self.resizable(False, False)
+        self.geometry("560x600")
+        self.minsize(520, 540)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
         self._create_widgets()
-    
+        self._load_from_settings()
+
     def _create_widgets(self):
-        """Create settings widgets."""
-        # Title
-        title = ctk.CTkLabel(
-            self,
-            text="⚙️ Settings",
-            font=ctk.CTkFont(size=20, weight="bold")
+        ctk.CTkLabel(
+            self, text="⚙️ 设置 / Settings",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, padx=20, pady=(16, 6), sticky="w")
+
+        self.tabs = ctk.CTkTabview(self, anchor="nw")
+        self.tabs.grid(row=1, column=0, padx=14, pady=4, sticky="nsew")
+        self.tabs.add("生成")
+        self.tabs.add("发丝")
+        self.tabs.add("AI 模型")
+        self.tabs.add("外观")
+
+        self._build_generation_tab(self.tabs.tab("生成"))
+        self._build_strands_tab(self.tabs.tab("发丝"))
+        self._build_models_tab(self.tabs.tab("AI 模型"))
+        self._build_appearance_tab(self.tabs.tab("外观"))
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.grid(row=2, column=0, padx=14, pady=(6, 14), sticky="ew")
+        btn_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkButton(
+            btn_row, text="↺ 恢复默认", command=self._reset_current_tab,
+            fg_color="gray30", hover_color="gray20", height=34, width=120,
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            btn_row, text="取消", command=self.destroy,
+            fg_color="gray40", hover_color="gray30", height=34, width=90,
+        ).grid(row=0, column=1, padx=(6, 6))
+
+        ctk.CTkButton(
+            btn_row, text="✓ 保存", command=self._save_settings,
+            fg_color="#1565c0", hover_color="#0d47a1",
+            height=34, width=110, font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=2)
+
+    def _add_field(self, parent, row, label, key_help, widget):
+        ctk.CTkLabel(parent, text=label, font=ctk.CTkFont(size=12)).grid(
+            row=row, column=0, padx=(8, 8), pady=(8, 0), sticky="w")
+        widget.grid(row=row, column=1, padx=(0, 8), pady=(8, 0), sticky="e")
+        ctk.CTkLabel(
+            parent, text=self._HELP.get(key_help, ""),
+            font=ctk.CTkFont(size=10), text_color="gray55", justify="left",
+            wraplength=480,
+        ).grid(row=row + 1, column=0, columnspan=2, padx=8, pady=(0, 6), sticky="w")
+
+    def _build_generation_tab(self, tab):
+        tab.grid_columnconfigure(0, weight=1)
+        self.iter_entry = ctk.CTkEntry(tab, width=120)
+        self._add_field(tab, 0, "迭代次数 (GPU only):", 'iterations', self.iter_entry)
+
+    def _build_strands_tab(self, tab):
+        tab.grid_columnconfigure(0, weight=1)
+        self.pts_entry = ctk.CTkEntry(tab, width=120)
+        self._add_field(tab, 0, "每条发丝点数:", 'points', self.pts_entry)
+        self.num_entry = ctk.CTkEntry(tab, width=120)
+        self._add_field(tab, 2, "最大发丝数:", 'num_strands', self.num_entry)
+        self.minlen_entry = ctk.CTkEntry(tab, width=120)
+        self._add_field(tab, 4, "最小发丝长度:", 'min_length', self.minlen_entry)
+        self.method_menu = ctk.CTkOptionMenu(tab, values=["clustering", "flow_field"], width=140)
+        self._add_field(tab, 6, "提取方法:", 'method', self.method_menu)
+
+    def _build_models_tab(self, tab):
+        tab.grid_columnconfigure(0, weight=1)
+
+        status_card = ctk.CTkFrame(tab, fg_color="gray18", corner_radius=8)
+        status_card.grid(row=0, column=0, padx=8, pady=(10, 6), sticky="ew")
+        self._models_status_label = ctk.CTkLabel(
+            status_card, text="正在检查本地缓存…",
+            font=ctk.CTkFont(size=12), justify="left", anchor="w",
         )
-        title.pack(padx=20, pady=20)
-        
-        # Generation settings
-        gen_frame = ctk.CTkFrame(self)
-        gen_frame.pack(fill="x", padx=20, pady=10)
-        
-        gen_label = ctk.CTkLabel(
-            gen_frame,
-            text="Generation Settings",
-            font=ctk.CTkFont(size=14, weight="bold")
+        self._models_status_label.pack(padx=12, pady=10, fill="x")
+
+        self.one_click_btn = ctk.CTkButton(
+            tab, text="⬇  一键下载所有 AI 模型 (~184 MB)",
+            command=self._one_click_download,
+            height=48, font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#2e7d32", hover_color="#1b5e20",
         )
-        gen_label.pack(padx=10, pady=10, anchor="w")
-        
-        # Iterations
-        iter_frame = ctk.CTkFrame(gen_frame, fg_color="transparent")
-        iter_frame.pack(fill="x", padx=10, pady=5)
+        self.one_click_btn.grid(row=1, column=0, padx=8, pady=(4, 6), sticky="ew")
 
-        ctk.CTkLabel(iter_frame, text="Iterations:").pack(side="left")
-        self.iter_entry = ctk.CTkEntry(iter_frame, width=100)
-        self.iter_entry.pack(side="right")
-        self.iter_entry.insert(0, str(self.parent_window.settings.get('num_iterations', 1000)))
+        ctk.CTkLabel(
+            tab, text="模型缓存到 ~/.cache/huggingface/hub，首次下载后无需重复下载。",
+            font=ctk.CTkFont(size=10), text_color="gray55",
+        ).grid(row=2, column=0, padx=8, pady=(0, 12), sticky="w")
 
-        # Strand settings
-        strand_frame = ctk.CTkFrame(self)
-        strand_frame.pack(fill="x", padx=20, pady=10)
+        ctk.CTkLabel(tab, text="HuggingFace 镜像:", font=ctk.CTkFont(size=12)).grid(
+            row=3, column=0, padx=8, pady=(8, 0), sticky="w")
+        self.mirror_entry = ctk.CTkEntry(tab, placeholder_text="https://hf-mirror.com（推荐国内用户）")
+        self.mirror_entry.grid(row=4, column=0, padx=8, pady=(2, 0), sticky="ew")
+        ctk.CTkLabel(
+            tab, text=self._HELP['mirror'],
+            font=ctk.CTkFont(size=10), text_color="gray55",
+            wraplength=480, justify="left",
+        ).grid(row=5, column=0, padx=8, pady=(2, 10), sticky="w")
 
-        strand_label = ctk.CTkLabel(
-            strand_frame,
-            text="Strand Settings",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        strand_label.pack(padx=10, pady=10, anchor="w")
+        self._refresh_models_status()
 
-        # Points per strand
-        pts_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
-        pts_frame.pack(fill="x", padx=10, pady=5)
-
-        ctk.CTkLabel(pts_frame, text="Points per strand:").pack(side="left")
-        self.pts_entry = ctk.CTkEntry(pts_frame, width=100)
-        self.pts_entry.pack(side="right")
-        self.pts_entry.insert(0, str(self.parent_window.settings.get('points_per_strand', 32)))
-
-        # Num strands
-        num_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
-        num_frame.pack(fill="x", padx=10, pady=5)
-
-        ctk.CTkLabel(num_frame, text="Max strands:").pack(side="left")
-        self.num_entry = ctk.CTkEntry(num_frame, width=100)
-        self.num_entry.pack(side="right")
-        self.num_entry.insert(0, str(self.parent_window.settings.get('num_strands', 2000)))
-
-        # Min strand length
-        minlen_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
-        minlen_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(minlen_frame, text="Min strand length:").pack(side="left")
-        self.minlen_entry = ctk.CTkEntry(minlen_frame, width=100)
-        self.minlen_entry.pack(side="right")
-        self.minlen_entry.insert(0, str(self.parent_window.settings.get('min_strand_length', 0.05)))
-
-        # Extraction method
-        method_frame = ctk.CTkFrame(strand_frame, fg_color="transparent")
-        method_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(method_frame, text="Extraction method:").pack(side="left")
-        self.method_menu = ctk.CTkOptionMenu(
-            method_frame, values=["clustering", "flow_field"], width=130
-        )
-        self.method_menu.pack(side="right")
-        self.method_menu.set(self.parent_window.settings.get('extraction_method', 'clustering'))
-        
-        # Appearance
-        app_frame = ctk.CTkFrame(self)
-        app_frame.pack(fill="x", padx=20, pady=10)
-        
-        app_label = ctk.CTkLabel(
-            app_frame,
-            text="Appearance",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        app_label.pack(padx=10, pady=10, anchor="w")
-        
-        # Theme
-        theme_frame = ctk.CTkFrame(app_frame, fg_color="transparent")
-        theme_frame.pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(theme_frame, text="Theme:").pack(side="left")
+    def _build_appearance_tab(self, tab):
+        tab.grid_columnconfigure(0, weight=1)
         self.theme_menu = ctk.CTkOptionMenu(
-            theme_frame,
-            values=["Dark", "Light", "System"],
-            command=self._change_theme
+            tab, values=["Dark", "Light", "System"], command=self._change_theme, width=140,
         )
-        self.theme_menu.pack(side="right")
-        saved_theme = self.parent_window.settings.get('theme', 'dark')
-        self.theme_menu.set(saved_theme.capitalize())
-        
-        # Pre-download models button
-        models_frame = ctk.CTkFrame(self)
-        models_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self._add_field(tab, 0, "主题:", 'theme', self.theme_menu)
 
-        models_label = ctk.CTkLabel(
-            models_frame,
-            text="AI 模型",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        )
-        models_label.pack(padx=10, pady=(10, 6), anchor="w")
+    def _load_from_settings(self):
+        s = self.parent_window.settings
+        self.iter_entry.insert(0, str(s.get('num_iterations', 1000)))
+        self.pts_entry.insert(0, str(s.get('points_per_strand', 32)))
+        self.num_entry.insert(0, str(s.get('num_strands', 2000)))
+        self.minlen_entry.insert(0, str(s.get('min_strand_length', 0.05)))
+        self.method_menu.set(s.get('extraction_method', 'clustering'))
+        self.theme_menu.set(s.get('theme', 'dark').capitalize())
+        if s.get('hf_endpoint', ''):
+            self.mirror_entry.insert(0, s['hf_endpoint'])
 
-        predownload_btn = ctk.CTkButton(
-            models_frame,
-            text="预下载 AI 模型",
-            command=self._predownload_models,
-        )
-        predownload_btn.pack(padx=10, pady=(0, 6), anchor="w")
+    def _reset_current_tab(self):
+        from src.config.settings_manager import DEFAULT_SETTINGS
+        d = DEFAULT_SETTINGS
+        current = self.tabs.get()
+        if current == "生成":
+            self.iter_entry.delete(0, "end")
+            self.iter_entry.insert(0, str(d['num_iterations']))
+        elif current == "发丝":
+            self.pts_entry.delete(0, "end"); self.pts_entry.insert(0, str(d['points_per_strand']))
+            self.num_entry.delete(0, "end"); self.num_entry.insert(0, str(d['num_strands']))
+            self.minlen_entry.delete(0, "end"); self.minlen_entry.insert(0, str(d['min_strand_length']))
+            self.method_menu.set(d['extraction_method'])
+        elif current == "AI 模型":
+            self.mirror_entry.delete(0, "end")
+        elif current == "外观":
+            self.theme_menu.set(d['theme'].capitalize())
+            self._change_theme(d['theme'].capitalize())
 
-        # HuggingFace mirror
-        mirror_row = ctk.CTkFrame(models_frame, fg_color="transparent")
-        mirror_row.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(mirror_row, text="镜像地址:", font=ctk.CTkFont(size=11)).pack(side="left")
-        self.mirror_entry = ctk.CTkEntry(mirror_row, placeholder_text="https://hf-mirror.com（留空用官方）")
-        self.mirror_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        saved_mirror = self.parent_window.settings.get('hf_endpoint', '')
-        if saved_mirror:
-            self.mirror_entry.insert(0, saved_mirror)
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=20, pady=(10, 20))
-
-        save_btn = ctk.CTkButton(
-            btn_frame,
-            text="Save",
-            command=self._save_settings
-        )
-        save_btn.pack(side="right", padx=5)
-
-        cancel_btn = ctk.CTkButton(
-            btn_frame,
-            text="Cancel",
-            fg_color="gray40",
-            command=self.destroy
-        )
-        cancel_btn.pack(side="right", padx=5)
-    
-    def _predownload_models(self):
-        """Open a download dialog for all AI models (cached ones shown as already done)."""
+    def _refresh_models_status(self):
         try:
-            from src.core.model_manager import get_models_to_download
-            missing = get_models_to_download()
+            from src.core.model_manager import get_all_models_status
+            models = get_all_models_status()
         except Exception:
-            missing = []
-
-        if not missing:
-            # All cached — show a status dialog using the download dialog (all cached)
-            try:
-                from src.core.model_manager import get_all_models_status
-                all_models = get_all_models_status()
-            except Exception:
-                all_models = []
-
-            if not all_models:
-                try:
-                    from CTkMessagebox import CTkMessagebox
-                    CTkMessagebox(
-                        master=self,
-                        title="AI 模型",
-                        message="所有模型均已缓存，无需重新下载。",
-                        icon="check",
-                    )
-                except Exception:
-                    pass
-                return
-
-            # Show dialog with all models marked as cached
-            from src.ui.model_download_dialog import ModelDownloadDialog
-            ModelDownloadDialog(
-                parent=self,
-                models_to_download=all_models,
-                on_complete=None,
-                on_cancel=None,
+            self._models_status_label.configure(
+                text="无法读取模型状态（transformers 可能未安装）",
+                text_color="#ff9800",
             )
-        else:
-            from src.ui.model_download_dialog import ModelDownloadDialog
-            ModelDownloadDialog(
-                parent=self,
-                models_to_download=missing,
-                on_complete=None,
-                on_cancel=None,
+            return
+        if not models:
+            self._models_status_label.configure(text="(无模型条目)", text_color="gray60")
+            return
+        lines = []
+        all_cached = True
+        for m in models:
+            mark = "✅ 已缓存" if m.get('cached') else "⬜ 未下载"
+            if not m.get('cached'):
+                all_cached = False
+            lines.append(f"{mark}   {m['display_name']}  (~{m.get('approx_size_mb', '?')} MB)")
+        text = "\n".join(lines)
+        color = "#4caf50" if all_cached else "#ff9800"
+        self._models_status_label.configure(text=text, text_color=color)
+        if all_cached:
+            self.one_click_btn.configure(
+                text="✓ 所有模型已缓存（点击重新下载）",
+                fg_color="gray40", hover_color="gray30",
             )
+
+    def _one_click_download(self):
+        endpoint = self.mirror_entry.get().strip()
+        if endpoint:
+            import os
+            os.environ['HF_ENDPOINT'] = endpoint
+        try:
+            from src.core.model_manager import get_models_to_download, get_all_models_status
+            missing = get_models_to_download()
+            all_models = get_all_models_status()
+        except Exception as exc:
+            self._models_status_label.configure(
+                text=f"模型状态查询失败：{exc}", text_color="#f44336")
+            return
+        from src.ui.model_download_dialog import ModelDownloadDialog
+        ModelDownloadDialog(
+            parent=self,
+            models_to_download=missing if missing else all_models,
+            on_complete=self._refresh_models_status,
+            on_cancel=None,
+        )
 
     def _change_theme(self, value):
-        """Change application theme."""
         ctk.set_appearance_mode(value.lower())
-    
+
     def _save_settings(self):
-        """Validate, apply, persist settings, then close."""
-        # Validate numeric fields
         try:
             num_iterations = int(self.iter_entry.get())
             points_per_strand = int(self.pts_entry.get())
             num_strands = int(self.num_entry.get())
             min_strand_length = float(self.minlen_entry.get())
             if num_iterations <= 0 or points_per_strand <= 0 or num_strands <= 0:
-                raise ValueError("Values must be positive")
+                raise ValueError("数值必须为正")
             if min_strand_length < 0:
-                raise ValueError("Min strand length must be ≥ 0")
+                raise ValueError("最小发丝长度必须 >= 0")
         except ValueError as exc:
             try:
                 from CTkMessagebox import CTkMessagebox
-                CTkMessagebox(
-                    master=self, title="Invalid Settings",
-                    message=f"Please check your inputs.\n{exc}", icon="cancel"
-                )
+                CTkMessagebox(master=self, title="输入无效",
+                              message=f"请检查输入值。\n{exc}", icon="cancel")
             except Exception:
                 pass
             return
 
         parent = self.parent_window
-        extraction_method = self.method_menu.get() if hasattr(self, 'method_menu') else 'clustering'
-
-        # Apply to processors
+        method = self.method_menu.get()
         if hasattr(parent.gaussian_generator, 'set_parameters'):
             parent.gaussian_generator.set_parameters(num_iterations=num_iterations)
-
         if hasattr(parent.strand_extractor, 'set_parameters'):
             from src.core.hair_strands import StrandExtractionMethod
-            method_enum = (StrandExtractionMethod.FLOW_FIELD
-                           if extraction_method == 'flow_field'
+            method_enum = (StrandExtractionMethod.FLOW_FIELD if method == 'flow_field'
                            else StrandExtractionMethod.CLUSTERING)
             parent.strand_extractor.set_parameters(
                 points_per_strand=points_per_strand,
@@ -1120,23 +1163,19 @@ class SettingsDialog(ctk.CTkToplevel):
                 method=method_enum,
             )
 
-        # Update in-memory settings dict
         parent.settings['num_iterations'] = num_iterations
         parent.settings['points_per_strand'] = points_per_strand
         parent.settings['num_strands'] = num_strands
         parent.settings['min_strand_length'] = min_strand_length
-        parent.settings['extraction_method'] = extraction_method
+        parent.settings['extraction_method'] = method
         parent.settings['theme'] = self.theme_menu.get().lower()
-        parent.settings['hf_endpoint'] = self.mirror_entry.get().strip() if hasattr(self, 'mirror_entry') else ''
+        parent.settings['hf_endpoint'] = self.mirror_entry.get().strip()
 
-        # Apply mirror immediately so any subsequent download uses it
         try:
             from src.core.model_manager import apply_hf_mirror
             apply_hf_mirror()
         except Exception:
             pass
 
-        # Persist to disk
         settings_manager.save_settings(parent.settings)
-
         self.destroy()
