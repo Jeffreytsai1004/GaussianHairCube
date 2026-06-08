@@ -17,6 +17,46 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+def _quat_to_rotmat(q: np.ndarray) -> np.ndarray:
+    """Convert a (w, x, y, z) quaternion to a 3×3 rotation matrix."""
+    w, x, y, z = q
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+        [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)],
+    ], dtype=np.float32)
+
+
+def _rotmat_to_quat(R: np.ndarray) -> np.ndarray:
+    """Convert a 3×3 rotation matrix to a (w, x, y, z) quaternion."""
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+    if trace > 0.0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    return np.array([w, x, y, z], dtype=np.float32)
+
+
 class GaussianStatus(Enum):
     """Status of the Gaussian generation process."""
     IDLE = "idle"
@@ -567,38 +607,38 @@ class GaussianGenerator:
         callback: Optional[callable] = None
     ) -> 'GaussianCloud':
         """
-        Geometry-aware Gaussian initialization from a 3D point cloud.
+        Anisotropic Gaussian initialization from a 3D point cloud.
 
-        Uses local PCA (k=8 nearest neighbours) to orient each Gaussian's
-        covariance matrix along the local fibre direction rather than using
-        an isotropic identity covariance.
+        For each point, runs local PCA on k-nearest neighbours and decomposes
+        the result into:
+          - scale     = sqrt(eigenvalues), one axis per eigenvector
+          - rotation  = quaternion derived from the eigenvector matrix
+          - covariance = R · diag(s²) · Rᵀ, consistent with scale + rotation
+
+        The principal axis (largest eigenvalue) is biased to point downward
+        (-Y) because hair grows downward — this gives Gaussians elongated
+        ALONG individual strands rather than across them.
 
         Args:
             points:   float32 (N, 3) world-space positions
             colors:   float32 (N, 3) RGB colors in [0, 1]
             callback: Optional progress callback(progress, message)
-
-        Returns:
-            GaussianCloud with one splat per input point.
         """
         from scipy.spatial import cKDTree
 
         n = len(points)
-
         if n == 0:
             dummy_pos = np.zeros(3, dtype=np.float32)
-            return GaussianCloud(
-                splats=[],
-                bounds_min=dummy_pos,
-                bounds_max=dummy_pos,
-            )
+            return GaussianCloud(splats=[], bounds_min=dummy_pos, bounds_max=dummy_pos)
 
         if callback:
-            callback(0.75, f"从 {n} 个点初始化高斯点云...")
+            callback(0.75, f"从 {n} 个点初始化各向异性高斯…")
 
-        # Build KD-tree for local neighbourhoods
         tree = cKDTree(points)
         k_neighbors = min(8, n - 1)
+
+        # Batch-query all neighbours at once for speed
+        all_dists, all_idxs = tree.query(points, k=k_neighbors + 1)
 
         splats = []
         for i in range(n):
@@ -607,45 +647,57 @@ class GaussianGenerator:
 
             pos = points[i]
             color = colors[i]
+            idxs = all_idxs[i, 1:]            # exclude self
+            dists = all_dists[i, 1:]
 
-            dists, idxs = tree.query(pos, k=k_neighbors + 1)
-            idxs = idxs[1:]   # exclude self
-            dists = dists[1:]
+            mean_dist = float(np.mean(dists)) if len(dists) > 0 else 0.01
+            fallback_scale = max(mean_dist * 0.5, 1e-4)
 
-            init_scale = float(np.mean(dists) * 0.5) if len(dists) > 0 else 0.01
-            init_scale = max(init_scale, 1e-4)
-
-            # Local PCA for covariance orientation
+            # ---- Anisotropic PCA decomposition ----
             if len(idxs) >= 3:
-                neighbors = points[idxs]
-                centered = neighbors - pos
-                if centered.shape[0] > 1:
-                    cov = np.cov(centered.T).astype(np.float32)
-                else:
-                    cov = np.eye(3, dtype=np.float32) * (init_scale ** 2)
-            else:
-                cov = np.eye(3, dtype=np.float32) * (init_scale ** 2)
+                neighbors = points[idxs] - pos        # centered (k, 3)
+                cov_mat = np.cov(neighbors.T)         # (3, 3)
+                # eigh returns ascending eigenvalues
+                eigvals, eigvecs = np.linalg.eigh(cov_mat)
+                eigvals = np.maximum(eigvals, 1e-8)   # guard against zeros
 
-            splat = GaussianSplat(
-                position=pos.copy().astype(np.float32),
+                # Scale = sqrt(eigvals), reorder so principal axis is last (largest)
+                scale_vec = np.sqrt(eigvals).astype(np.float32)
+                # Cap maximum scale to avoid degenerate giant Gaussians
+                scale_vec = np.clip(scale_vec, 1e-4, mean_dist * 3.0)
+
+                # Make principal axis point downward (-Y) by convention
+                principal = eigvecs[:, 2]
+                if principal[1] > 0:
+                    eigvecs[:, 2] = -eigvecs[:, 2]
+                # Ensure right-handed coordinate frame
+                if np.linalg.det(eigvecs) < 0:
+                    eigvecs[:, 0] = -eigvecs[:, 0]
+
+                quat = _rotmat_to_quat(eigvecs)
+                # Reconstruct covariance: R · diag(s²) · Rᵀ
+                S2 = np.diag(scale_vec ** 2)
+                cov = (eigvecs @ S2 @ eigvecs.T).astype(np.float32)
+            else:
+                scale_vec = np.array([fallback_scale] * 3, dtype=np.float32)
+                quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                cov = (np.eye(3, dtype=np.float32) * (fallback_scale ** 2))
+
+            splats.append(GaussianSplat(
+                position=pos.astype(np.float32),
                 covariance=cov,
                 color=color.clip(0, 1).astype(np.float32),
                 opacity=0.9,
-                scale=np.array([init_scale, init_scale, init_scale], dtype=np.float32),
-                rotation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            )
-            splats.append(splat)
+                scale=scale_vec,
+                rotation=quat,
+            ))
 
             if callback and i % 1000 == 0 and n > 0:
                 callback(0.75 + 0.10 * (i / n), f"初始化高斯: {i}/{n}")
 
         if len(splats) == 0:
             dummy_pos = np.zeros(3, dtype=np.float32)
-            return GaussianCloud(
-                splats=[],
-                bounds_min=dummy_pos,
-                bounds_max=dummy_pos,
-            )
+            return GaussianCloud(splats=[], bounds_min=dummy_pos, bounds_max=dummy_pos)
 
         all_pos = np.stack([s.position for s in splats])
         cloud = GaussianCloud(
@@ -655,7 +707,13 @@ class GaussianGenerator:
         )
 
         if callback:
-            callback(0.85, f"高斯初始化完成: {len(splats)} 个高斯点")
+            # Quick anisotropy report so users can sanity-check the result
+            scales = np.stack([s.scale for s in splats])
+            aniso_ratio = float((scales.max(axis=1) / scales.min(axis=1).clip(1e-6)).mean())
+            callback(
+                0.85,
+                f"高斯初始化完成：{len(splats)} 个点，平均各向异性比 {aniso_ratio:.2f}×",
+            )
 
         return cloud
 
@@ -832,25 +890,30 @@ class GaussianGenerator:
 
         # Write back optimised parameters to splat list
         with torch.no_grad():
-            final_positions  = positions.detach().cpu().numpy()        # Nx3
-            final_scales     = torch.exp(log_scales).detach().cpu().numpy()  # Nx3
-            final_opacities  = torch.sigmoid(raw_opacities).detach().cpu().numpy()  # N
-            final_colors     = torch.sigmoid(colors).detach().cpu().numpy()          # Nx3
+            final_positions  = positions.detach().cpu().numpy()
+            final_scales     = torch.exp(log_scales).detach().cpu().numpy()
+            final_opacities  = torch.sigmoid(raw_opacities).detach().cpu().numpy()
+            final_colors     = torch.sigmoid(colors).detach().cpu().numpy()
 
         new_splats: List[GaussianSplat] = []
         for j, s in enumerate(splats):
-            new_s = GaussianSplat(
+            # Preserve anisotropic orientation: rebuild covariance from the
+            # original rotation × the optimised scales.  Previously we wrote
+            # diag(scale²) which destroyed all PCA-derived anisotropy.
+            R = _quat_to_rotmat(s.rotation)
+            cov = (R @ np.diag(final_scales[j] ** 2) @ R.T).astype(np.float32)
+
+            new_splats.append(GaussianSplat(
                 position=final_positions[j],
-                covariance=np.diag(final_scales[j] ** 2),
+                covariance=cov,
                 color=final_colors[j],
                 opacity=float(final_opacities[j]),
-                scale=final_scales[j],       # ndarray (3,)
-                rotation=s.rotation
-            )
-            new_splats.append(new_s)
+                scale=final_scales[j],
+                rotation=s.rotation,        # frozen during optimisation
+            ))
 
         if callback:
-            callback(0.95, f"高斯优化完成，{len(new_splats)} 个高斯点")
+            callback(0.95, f"高斯优化完成，{len(new_splats)} 个高斯点（保留各向异性）")
 
         return new_splats
 
